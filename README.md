@@ -261,11 +261,19 @@ Access and manage your Stremio library.
 - **list**: View all items in your library
 - **continue**: See what you're currently watching
 - **search**: Find specific titles in your library
+- **check**: Check whether a title or IMDb ID is already active/removed in your library
+- **add**: Add or re-add a movie/series to your library using `datastorePut`
+- **remove**: Mark a library item as removed
 
 **Examples**:
 - "List my library"
 - "What am I currently watching?"
 - "Search my library for Breaking Bad"
+- "Check if The Great Cleric is in my library"
+- "Add Sword Art Online to my Stremio library"
+- "Remove Breaking Bad from my library"
+
+> Library writes use Stremio's `libraryItem` datastore and verify the write with a follow-up read. New items must use the `_id` field (for example `tt0903747`), not `id`.
 
 ### 4. **tv_control** - Complete TV Control
 Control all aspects of your Android TV.

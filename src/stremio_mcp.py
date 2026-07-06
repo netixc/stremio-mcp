@@ -4,6 +4,7 @@ Stremio MCP Server - Control Stremio on Android TV via ADB
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 from typing import Any, Optional
@@ -394,6 +395,7 @@ class StremioAPIClient:
     """Client for Stremio API to access user library"""
 
     API_URL = "https://api.strem.io"
+    CINEMETA_URL = "https://v3-cinemeta.strem.io"
 
     def __init__(self, auth_key: str):
         self.auth_key = auth_key
@@ -425,11 +427,38 @@ class StremioAPIClient:
             logger.error(f"Stremio API request failed: {e}")
             return {}
 
-    def get_library(self) -> list:
+    def _utc_now(self) -> str:
+        """Return an ISO-8601 UTC timestamp compatible with Stremio datastore."""
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _normalize_id(self, item_id: str) -> str:
+        """Stremio library IDs may contain video suffixes; library item IDs are base meta IDs."""
+        return item_id.split(":")[0] if item_id else ""
+
+    def get_library_item(self, item_id: str) -> Optional[dict]:
+        """Get a single library item by IMDb/meta ID."""
+        base_id = self._normalize_id(item_id)
+        if not base_id:
+            return None
+
+        result = self._make_request("datastoreGet", {
+            "collection": "libraryItem",
+            "ids": [base_id],
+            "all": False
+        })
+
+        if isinstance(result, list) and result:
+            return result[0]
+        if isinstance(result, dict) and "libraryItem" in result and result["libraryItem"]:
+            return result["libraryItem"][0]
+        return None
+
+    def get_library(self, active_only: bool = False) -> list:
         """Get user's library items"""
         try:
             result = self._make_request("datastoreGet", {
                 "collection": "libraryItem",
+                "ids": [],
                 "all": True
             })
 
@@ -439,6 +468,9 @@ class StremioAPIClient:
             elif isinstance(result, dict) and "libraryItem" in result:
                 items = result["libraryItem"]
 
+            if active_only:
+                items = [item for item in items if not item.get("removed")]
+
             logger.info(f"Retrieved {len(items)} library items")
             return items
         except Exception as e:
@@ -447,7 +479,7 @@ class StremioAPIClient:
 
     def get_continue_watching(self) -> list:
         """Get items user is currently watching (not finished)"""
-        library = self.get_library()
+        library = self.get_library(active_only=True)
         continue_watching = []
 
         for item in library:
@@ -470,7 +502,7 @@ class StremioAPIClient:
 
     def search_library(self, query: str) -> list:
         """Search user's library for matching titles"""
-        library = self.get_library()
+        library = self.get_library(active_only=True)
         query_lower = query.lower()
 
         results = []
@@ -480,6 +512,112 @@ class StremioAPIClient:
                 results.append(item)
 
         return results
+
+    def fetch_cinemeta_meta(self, content_type: str, imdb_id: str) -> Optional[dict]:
+        """Fetch Stremio/Cinemeta metadata for a movie or series."""
+        try:
+            response = self.session.get(
+                f"{self.CINEMETA_URL}/meta/{content_type}/{imdb_id}.json",
+                timeout=15
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("meta") or data
+        except Exception as e:
+            logger.error(f"Failed to fetch Cinemeta metadata for {imdb_id}: {e}")
+            return None
+
+    def build_library_item(self, meta: dict, existing: Optional[dict] = None) -> dict:
+        """Build a datastore libraryItem from Cinemeta metadata.
+
+        Stremio's datastore requires the meta identifier in `_id`; using `id`
+        silently creates/updates an invalid empty-id row.
+        """
+        now = self._utc_now()
+        meta_id = meta.get("id") or meta.get("imdb_id") or meta.get("_id")
+        behavior_hints = meta.get("behaviorHints") or {}
+
+        item = {
+            "_id": meta_id,
+            "name": meta.get("name", ""),
+            "type": meta.get("type", ""),
+            "poster": meta.get("poster"),
+            "posterShape": meta.get("posterShape") or "poster",
+            "removed": False,
+            "temp": False,
+            "_ctime": existing.get("_ctime") if existing else now,
+            "_mtime": now,
+            "state": existing.get("state") if existing else {
+                "lastWatched": now,
+                "timeWatched": 0,
+                "timeOffset": 0,
+                "overallTimeWatched": 0,
+                "timesWatched": 0,
+                "flaggedWatched": 0,
+                "duration": 0,
+                "video_id": None,
+                "watched": None,
+                "noNotif": False
+            },
+            "behaviorHints": {
+                "defaultVideoId": behavior_hints.get("defaultVideoId"),
+                "featuredVideoId": behavior_hints.get("featuredVideoId"),
+                "hasScheduledVideos": bool(behavior_hints.get("hasScheduledVideos", False))
+            }
+        }
+
+        return item
+
+    def put_library_item(self, item: dict) -> bool:
+        """Write a library item to Stremio datastore and verify it persisted."""
+        item_id = item.get("_id", "")
+        if not item_id:
+            logger.error("Cannot write library item without _id")
+            return False
+
+        self._make_request("datastorePut", {
+            "collection": "libraryItem",
+            "changes": [item]
+        })
+
+        persisted = self.get_library_item(item_id)
+        return bool(persisted and persisted.get("_id") == item_id and persisted.get("removed") == item.get("removed"))
+
+    def add_to_library(self, content_type: str, imdb_id: str) -> tuple[bool, str, Optional[dict]]:
+        """Add or re-add a movie/series to the user's Stremio library."""
+        base_id = self._normalize_id(imdb_id)
+        existing = self.get_library_item(base_id)
+
+        if existing and not existing.get("removed"):
+            return True, "already_in_library", existing
+
+        meta = self.fetch_cinemeta_meta(content_type, base_id)
+        if not meta:
+            return False, "metadata_not_found", None
+
+        item = self.build_library_item(meta, existing)
+        if self.put_library_item(item):
+            return True, "added" if not existing else "readded", item
+
+        return False, "write_failed", item
+
+    def remove_from_library(self, item_id: str) -> tuple[bool, str, Optional[dict]]:
+        """Mark a Stremio library item as removed."""
+        item = self.get_library_item(item_id)
+        if not item:
+            return False, "not_found", None
+
+        if item.get("removed"):
+            return True, "already_removed", item
+
+        item["removed"] = True
+        item["temp"] = False
+        item["_mtime"] = self._utc_now()
+
+        if self.put_library_item(item):
+            return True, "removed", item
+
+        return False, "write_failed", item
 
 
 # Initialize server
@@ -510,6 +648,53 @@ def initialize():
     else:
         stremio_client = StremioAPIClient(STREMIO_AUTH_KEY)
         logger.info("Stremio library access enabled")
+
+
+def resolve_library_target(arguments: dict) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Resolve tool arguments to (content_type, imdb_id, title, error).
+
+    The Stremio datastore uses `series`, while TMDB uses `tv`.
+    """
+    content_type = arguments.get("type", "auto")
+    if content_type == "tv":
+        content_type = "series"
+
+    imdb_id = arguments.get("imdb_id")
+    query = arguments.get("query")
+    year = arguments.get("year")
+
+    if imdb_id:
+        if content_type == "auto":
+            return None, None, None, "When using imdb_id, provide type='movie' or type='series'."
+        return content_type, imdb_id.split(":")[0], imdb_id, None
+
+    if not query:
+        return None, None, None, "Provide either 'query' or 'imdb_id'."
+
+    if not tmdb_client:
+        return None, None, None, "TMDB_API_KEY is required to resolve titles. Use imdb_id to avoid TMDB lookup."
+
+    search_types = ["movie", "series"] if content_type == "auto" else [content_type]
+    candidates = []
+
+    for search_type in search_types:
+        tmdb_type = "tv" if search_type == "series" else "movie"
+        results = tmdb_client.search_tv(query, year) if tmdb_type == "tv" else tmdb_client.search_movie(query, year)
+
+        for result in results[:5]:
+            tmdb_id = result["id"]
+            external_ids = tmdb_client.get_external_ids(tmdb_type, tmdb_id)
+            candidate_imdb_id = external_ids.get("imdb_id")
+            if not candidate_imdb_id:
+                continue
+
+            title = result.get("name") or result.get("title") or query
+            candidates.append((search_type, candidate_imdb_id, title))
+
+    if not candidates:
+        return None, None, None, f"No TMDB result with IMDb ID found for '{query}'."
+
+    return candidates[0][0], candidates[0][1], candidates[0][2], None
 
 
 @app.list_tools()
@@ -585,18 +770,37 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="library",
-            description="Access Stremio library. Actions: list (all items), continue (currently watching), search (find by title).",
+            description="Access and manage Stremio library. Actions: list, continue, search, check, add, remove.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "continue", "search"],
-                        "description": "list, continue, or search"
+                        "enum": ["list", "continue", "search", "check", "add", "remove"],
+                        "description": "list, continue, search, check, add, or remove"
                     },
                     "query": {
                         "type": "string",
-                        "description": "Title to search (for search action)"
+                        "description": "Title to search/check/add/remove"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["movie", "tv", "series", "auto"],
+                        "description": "Content type for add/check/remove. 'tv' and 'series' are equivalent.",
+                        "default": "auto"
+                    },
+                    "imdb_id": {
+                        "type": "string",
+                        "description": "IMDb/meta ID to check/add/remove directly"
+                    },
+                    "year": {
+                        "type": "integer",
+                        "description": "Optional year filter when resolving query via TMDB"
+                    },
+                    "active_only": {
+                        "type": "boolean",
+                        "description": "For list/search/check, exclude removed items",
+                        "default": True
                     }
                 },
                 "required": ["action"]
@@ -784,9 +988,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text="Error: STREMIO_AUTH_KEY not configured.")]
 
             action = arguments["action"]
+            active_only = arguments.get("active_only", True)
 
             if action == "list":
-                library = stremio_client.get_library()
+                library = stremio_client.get_library(active_only=active_only)
                 if not library:
                     return [TextContent(type="text", text="Your library is empty or unavailable.")]
 
@@ -829,6 +1034,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     return [TextContent(type="text", text="Search action requires 'query' parameter.")]
 
                 results = stremio_client.search_library(query)
+                if not active_only:
+                    query_lower = query.lower()
+                    results = [
+                        item for item in stremio_client.get_library(active_only=False)
+                        if query_lower in item.get("name", "").lower()
+                    ]
                 if not results:
                     return [TextContent(type="text", text=f"No results for '{query}' in library.")]
 
@@ -837,9 +1048,64 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     name = item.get("name", "Unknown")
                     content_type = item.get("type", "unknown")
                     imdb_id = item.get("_id", "").split(":")[0]
-                    output.append(f"• {name} ({content_type}) - IMDb: {imdb_id}")
+                    state = "removed" if item.get("removed") else "active"
+                    output.append(f"• {name} ({content_type}, {state}) - IMDb: {imdb_id}")
 
                 return [TextContent(type="text", text="\n".join(output))]
+
+            elif action == "check":
+                content_type, imdb_id, title, error = resolve_library_target(arguments)
+                if error:
+                    return [TextContent(type="text", text=f"Error: {error}")]
+
+                item = stremio_client.get_library_item(imdb_id)
+                if not item:
+                    return [TextContent(type="text", text=f"Not found in library: {title or imdb_id}")]
+
+                state = item.get("state", {})
+                status = "removed" if item.get("removed") else "active"
+                watched = "watched" if state.get("flaggedWatched") == 1 or state.get("timesWatched", 0) > 0 else "not watched"
+                if item.get("type") == "series" and state.get("watched"):
+                    watched = "has per-episode watched data"
+
+                return [TextContent(
+                    type="text",
+                    text=(
+                        f"{item.get('name', title or imdb_id)} is in library ({status}).\n"
+                        f"Type: {item.get('type', content_type)}\n"
+                        f"IMDb ID: {item.get('_id', imdb_id)}\n"
+                        f"Watch status: {watched}\n"
+                        f"Last watched: {state.get('lastWatched', 'N/A')}\n"
+                        f"Current video: {state.get('video_id') or 'N/A'}"
+                    )
+                )]
+
+            elif action == "add":
+                content_type, imdb_id, title, error = resolve_library_target(arguments)
+                if error:
+                    return [TextContent(type="text", text=f"Error: {error}")]
+
+                success, status, item = stremio_client.add_to_library(content_type, imdb_id)
+                if not success:
+                    return [TextContent(type="text", text=f"Failed to add {title or imdb_id}: {status}")]
+
+                name = item.get("name", title or imdb_id) if item else (title or imdb_id)
+                return [TextContent(
+                    type="text",
+                    text=f"{name}: {status.replace('_', ' ')} ({content_type}, IMDb: {imdb_id})"
+                )]
+
+            elif action == "remove":
+                content_type, imdb_id, title, error = resolve_library_target(arguments)
+                if error:
+                    return [TextContent(type="text", text=f"Error: {error}")]
+
+                success, status, item = stremio_client.remove_from_library(imdb_id)
+                if not success:
+                    return [TextContent(type="text", text=f"Failed to remove {title or imdb_id}: {status}")]
+
+                name = item.get("name", title or imdb_id) if item else (title or imdb_id)
+                return [TextContent(type="text", text=f"{name}: {status.replace('_', ' ')}")]
 
         elif name == "tv_control":
             if not controller:

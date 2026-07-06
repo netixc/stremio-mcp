@@ -137,6 +137,26 @@ The MCP server works with natural language, so you can phrase requests in many w
 "Play the latest episode of..." (you'll need to specify which episode)
 ```
 
+### Stremio Library Management
+
+```
+User: Is The Great Cleric already in my Stremio library?
+Claude: [Uses library action=check]
+Response: The Great Cleric is not in library.
+
+User: Add The Great Cleric to my Stremio library
+Claude: [Resolves title to IMDb ID, fetches Cinemeta metadata, writes libraryItem with datastorePut, verifies datastoreGet]
+Response: The Great Cleric: added (series, IMDb: tt28101962)
+
+User: Add Breaking Bad to my Stremio library
+Claude: [Finds an existing active library item]
+Response: Breaking Bad: already in library (series, IMDb: tt0903747)
+
+User: Remove Breaking Bad from my library
+Claude: [Uses library action=remove]
+Response: Breaking Bad: removed
+```
+
 ## Error Handling Examples
 
 ### No Results Found
