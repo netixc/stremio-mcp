@@ -1,5 +1,7 @@
 # Stremio MCP Server
 
+<!-- mcp-name: io.github.netixc/stremio-mcp -->
+
 [![CI](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -49,6 +51,8 @@ STREMIO_AUTH_KEY=
 
 A convenience script is also available as `./setup.sh`. It installs `uv` with uv's official installer when `uv` is missing, so inspect the script first if you prefer not to run remote installers.
 
+The checkout exposes an installable `stremio-mcp` command through `uv`. PyPI and MCP Registry metadata are prepared but **not published yet**, so continue using the source-checkout instructions until a release is announced.
+
 ### 2. Pair and connect the TV
 
 On the TV, enable **Developer options** and **Wireless debugging**. Menu names vary by manufacturer.
@@ -90,7 +94,7 @@ Add the server, replacing both absolute paths:
         "run",
         "--env-file",
         "/absolute/path/to/stremio-mcp/.env",
-        "src/stremio_mcp.py"
+        "stremio-mcp"
       ]
     }
   }
@@ -216,7 +220,9 @@ uv run --locked python -m compileall -q src tests
 uv build
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and [SECURITY.md](SECURITY.md) for vulnerability reporting and credential-redaction guidance.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, [CHANGELOG.md](CHANGELOG.md) for release notes, and [SECURITY.md](SECURITY.md) for vulnerability reporting and credential-redaction guidance.
+
+`server.json` contains pre-publication metadata for the official MCP Registry. It intentionally refers to the future PyPI package and will not be published until the package exists and release artifacts have been reviewed.
 
 ## Security
 

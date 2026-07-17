@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "stremio-mcp-server"
 version = "1.0.0"
@@ -9,6 +13,18 @@ keywords = ["mcp", "stremio", "android-tv", "adb", "remote-control"]
 authors = [
     { name = "netixc" }
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Video",
+]
 
 dependencies = [
     "mcp>=1.28.1",
@@ -16,10 +32,16 @@ dependencies = [
     "python-dotenv>=1.2.2",
 ]
 
+[project.scripts]
+stremio-mcp = "stremio_mcp:cli"
+stremio-mcp-server = "stremio_mcp:cli"
+
 [project.urls]
 Homepage = "https://github.com/netixc/stremio-mcp"
+Documentation = "https://github.com/netixc/stremio-mcp#readme"
 Repository = "https://github.com/netixc/stremio-mcp"
 Issues = "https://github.com/netixc/stremio-mcp/issues"
+Changelog = "https://github.com/netixc/stremio-mcp/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = []

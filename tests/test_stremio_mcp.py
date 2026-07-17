@@ -1,7 +1,9 @@
+import json
 import sys
 import unittest
+from importlib.metadata import distribution
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -42,6 +44,48 @@ class InitializationTests(unittest.TestCase):
         self.assertEqual(stremio_mcp.tmdb_client.api_key, "test-key")
         self.assertEqual(stremio_mcp.stremio_client.auth_key, "test-auth")
         self.assertIsNone(stremio_mcp.controller.device)
+
+
+class CliTests(unittest.TestCase):
+    def test_cli_runs_the_stdio_server(self):
+        main = MagicMock(return_value=sentinel.main_coroutine)
+        with (
+            patch.object(stremio_mcp, "main", main),
+            patch.object(stremio_mcp.asyncio, "run") as asyncio_run,
+        ):
+            stremio_mcp.cli()
+
+        main.assert_called_once_with()
+        asyncio_run.assert_called_once_with(sentinel.main_coroutine)
+
+
+class ReleaseMetadataTests(unittest.TestCase):
+    def test_registry_metadata_matches_the_python_distribution(self):
+        root = Path(__file__).resolve().parents[1]
+        server = json.loads((root / "server.json").read_text())
+        package = distribution("stremio-mcp-server")
+        console_scripts = {
+            entry_point.name: entry_point.value
+            for entry_point in package.entry_points
+            if entry_point.group == "console_scripts"
+        }
+
+        self.assertEqual(server["name"], "io.github.netixc/stremio-mcp")
+        self.assertEqual(server["version"], package.version)
+        self.assertEqual(server["packages"][0]["identifier"], package.metadata["Name"])
+        self.assertEqual(server["packages"][0]["version"], package.version)
+        self.assertEqual(server["packages"][0]["runtimeHint"], "uvx")
+        self.assertEqual(
+            console_scripts,
+            {
+                "stremio-mcp": "stremio_mcp:cli",
+                "stremio-mcp-server": "stremio_mcp:cli",
+            },
+        )
+        self.assertIn(
+            "<!-- mcp-name: io.github.netixc/stremio-mcp -->",
+            (root / "README.md").read_text(),
+        )
 
 
 class DispatchTests(unittest.IsolatedAsyncioTestCase):

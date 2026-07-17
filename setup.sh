@@ -105,7 +105,7 @@ echo '   {
          "args": [
            "--directory", "'$(pwd)'",
            "run", "--env-file", "'$(pwd)'/.env",
-           "src/stremio_mcp.py"
+           "stremio-mcp"
          ]
        }
      }

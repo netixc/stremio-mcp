@@ -43,7 +43,9 @@ uv run --locked python -m compileall -q src tests
 uv build
 ```
 
-CI runs tests and compilation on Python 3.10 through 3.14 and builds the package on Python 3.12.
+CI runs tests and compilation on Python 3.10 through 3.14 and builds the package on Python 3.12. The separate release-readiness workflow checks the console entry point, package artifacts, and Registry schema reference without publishing anything.
+
+Keep the version synchronized across `pyproject.toml`, `server.json`, and `CHANGELOG.md`. Registry metadata must continue to identify the future PyPI package as `stremio-mcp-server` and the MCP namespace as `io.github.netixc/stremio-mcp`.
 
 Do not use real Stremio credentials or a physical Android TV for routine verification. If manual device testing is necessary, state exactly what was tested and remove sensitive details from the report.
 

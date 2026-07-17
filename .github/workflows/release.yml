@@ -1,0 +1,76 @@
+name: Release readiness
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "CHANGELOG.md"
+      - "README.md"
+      - "pyproject.toml"
+      - "server.json"
+      - "src/**"
+      - "tests/**"
+      - "uv.lock"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Sync locked dependencies
+        run: uv sync --locked --python 3.12
+      - name: Run release metadata tests
+        run: uv run --locked --python 3.12 python -m unittest tests.test_stremio_mcp.CliTests tests.test_stremio_mcp.ReleaseMetadataTests -v
+      - name: Validate MCP Registry metadata
+        run: |
+          uv run --locked --python 3.12 python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import requests
+
+          server = json.loads(Path("server.json").read_text())
+          response = requests.post(
+              "https://registry.modelcontextprotocol.io/v0/validate",
+              json=server,
+              timeout=30,
+          )
+          response.raise_for_status()
+          result = response.json()
+          assert result.get("valid") is True, result
+          PY
+      - name: Build package artifacts
+        run: uv build
+      - name: Verify wheel console command
+        run: |
+          wheel="$(find dist -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv run --isolated --no-project --with "$wheel" python - <<'PY'
+          from importlib.metadata import distribution
+
+          package = distribution("stremio-mcp-server")
+          scripts = {
+              entry_point.name: entry_point.value
+              for entry_point in package.entry_points
+              if entry_point.group == "console_scripts"
+          }
+          assert scripts == {
+              "stremio-mcp": "stremio_mcp:cli",
+              "stremio-mcp-server": "stremio_mcp:cli",
+          }, scripts
+          PY
+          ANDROID_TV_HOST= TMDB_API_KEY= STREMIO_AUTH_KEY= \
+            uvx --no-env-file --from "$wheel" stremio-mcp-server </dev/null
