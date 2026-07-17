@@ -1,338 +1,172 @@
-# Usage Examples
+# Usage examples
 
-This document provides practical examples of how to use the Stremio MCP Server with Claude.
+These examples use the five tools exposed by the server: `search`, `play`, `library`, `tv_control`, and `playback_status`. The MCP client decides when to call them based on your prompt.
 
-## Quick Start Examples
+## Search before playing
 
-### Playing Movies
+Searching first is the safest workflow for remakes or similarly named titles.
 
-**Simple movie request:**
-```
-User: Play The Shawshank Redemption
-Claude: [Uses play_content tool to search and play the movie]
-Response: Now playing: The Shawshank Redemption (1994) on Stremio.
-```
-
-**Movie with specific year:**
-```
-User: Play Dune from 2021
-Claude: [Searches for Dune with year filter and plays it]
-Response: Now playing: Dune (2021) on Stremio.
+```text
+User: Search for Dune movies from 2021.
+Client: [Calls search with query="Dune", type="movie", year=2021]
+Server: • [MOVIE] Dune (2021)
+          IMDb ID: tt1160419
 ```
 
-### Playing TV Shows
+After confirming the result:
 
-**TV show episode:**
-```
-User: Play Breaking Bad season 1 episode 1
-Claude: [Searches for Breaking Bad and plays S01E01]
-Response: Now playing: Breaking Bad S01E01 on Stremio.
-```
-
-**Using shorthand notation:**
-```
-User: Play Game of Thrones S05E08
-Claude: [Parses season/episode and plays it]
-Response: Now playing: Game of Thrones S05E08 on Stremio.
+```text
+User: Play movie tt1160419.
+Client: [Calls play with imdb_id="tt1160419"]
+Server: Now playing: tt1160419
 ```
 
-### Searching Without Playing
+“Now playing” means Android accepted the Stremio intent. The server then attempts an automatic center key press, but it does not verify that press; a source may still need to be selected in Stremio.
 
-**Search for a movie:**
-```
-User: Search for movies about space
-Claude: [Uses search_movie tool]
-Response:
-• Interstellar (2014)
-  IMDb ID: tt0816692
-  Overview: A team of explorers travel through a wormhole in space...
+## Movies
 
-• Gravity (2013)
-  IMDb ID: tt1454468
-  Overview: Dr. Ryan Stone is a medical engineer on her first shuttle mission...
+### Play by title
 
-• The Martian (2015)
-  IMDb ID: tt3659388
-  Overview: During a manned mission to Mars, Astronaut Mark Watney...
+```text
+User: Play Inception from 2010.
+Client: [Calls play with query="Inception", type="movie", year=2010]
 ```
 
-**Search for a TV show:**
-```
-User: Find the TV show Stranger Things
-Claude: [Uses search_tv_show tool]
-Response:
-• Stranger Things (2016)
-  IMDb ID: tt4574334
-  Overview: When a young boy vanishes, a small town uncovers a mystery...
-```
+Title-based playback uses the first TMDB result. Use `search` first when the request is ambiguous.
 
-## Advanced Examples
+### Play by IMDb ID
 
-### Two-Step Process (Search Then Play)
-
-```
-User: What's the IMDb ID for Inception?
-Claude: [Searches for Inception]
-Response:
-• Inception (2010)
-  IMDb ID: tt1375666
-  Overview: A thief who steals corporate secrets...
-
-User: Play movie tt1375666
-Claude: [Uses play_movie tool]
-Response: Successfully sent play command for movie tt1375666 to Stremio on Android TV.
+```text
+User: Play movie tt0111161.
+Client: [Calls play with imdb_id="tt0111161"]
 ```
 
-### Handling Ambiguous Requests
+Direct IMDb playback does not require TMDB.
 
-```
-User: Play The Batman
-Claude: [Searches and finds multiple results]
-Response: I found several Batman movies:
+## Series episodes
 
-• The Batman (2022) - IMDb ID: tt1877830
-• Batman (1989) - IMDb ID: tt0096895
-• Batman Begins (2005) - IMDb ID: tt0372784
+A series request must include both season and episode:
 
-Which one would you like to play?
-
-User: The 2022 one
-Claude: [Plays The Batman (2022)]
-Response: Now playing: The Batman (2022) on Stremio.
+```text
+User: Play Breaking Bad season 1 episode 1.
+Client: [Calls play with query="Breaking Bad", type="tv", season=1, episode=1]
 ```
 
-### Binge Watching
+Or use an IMDb ID:
 
-```
-User: Play Stranger Things S01E01
-Claude: [Plays episode 1]
-Response: Now playing: Stranger Things S01E01 on Stremio.
-
-User: Next episode
-Claude: [Plays S01E02]
-Response: Now playing: Stranger Things S01E02 on Stremio.
+```text
+User: Play tt0903747 season 1 episode 2.
+Client: [Calls play with imdb_id="tt0903747", season=1, episode=2]
 ```
 
-## Natural Language Examples
+The server does not track a “next episode” counter. Ask for the next season and episode explicitly, or use `tv_control` with playback action `next` when the active Android player supports that media command.
 
-The MCP server works with natural language, so you can phrase requests in many ways:
+## TV controls
 
-### Movies
+```text
+User: Pause playback.
+Client: [Calls tv_control with category="playback", action="pause"]
 
-```
-"Put on The Matrix"
-"I want to watch Pulp Fiction"
-"Start playing The Godfather"
-"Can you play Forrest Gump?"
-"Show me The Dark Knight"
-```
+User: Turn the volume up.
+Client: [Calls tv_control with category="volume", action="up"]
 
-### TV Shows
+User: Set the volume to 8.
+Client: [Calls tv_control with category="volume", action="set", value=8]
 
-```
-"Play the first episode of The Office"
-"Put on Breaking Bad season 2 episode 3"
-"I want to watch The Wire S03E05"
-"Start the pilot episode of Lost"
-"Play the latest episode of..." (you'll need to specify which episode)
+User: Move down and select the highlighted source.
+Client: [Calls tv_control navigate/down, then navigate/select]
+
+User: Put the TV to sleep.
+Client: [Calls tv_control with category="power", action="sleep"]
 ```
 
-### Library Management by IMDb ID
+These commands affect the physical Android TV.
 
-Mutation actions require an explicit IMDb ID so similarly named titles are never changed by accident.
+## Playback status
 
-```
-User: Check movie tt1375666 in my library
-Claude: [Uses library action=check]
-Response: Inception is active in library (movie, IMDb: tt1375666).
-
-User: Remove movie tt1375666 from my library
-Claude: [Uses library action=remove and verifies the soft delete]
-Response: Inception: removed
-
-User: Add movie tt1375666 to my library
-Claude: [Fetches Cinemeta metadata, writes the item, and verifies it]
-Response: Inception: re-added
+```text
+User: What's currently playing?
+Client: [Calls playback_status]
+Server: Playback Status
+        App: Stremio
+        Title: ...
+        State: playing
+        Position: ... / ...
 ```
 
-## Error Handling Examples
+Title, position, and duration depend on diagnostics exposed by the TV and media player. Missing values do not necessarily mean playback failed.
 
-### No Results Found
+## Library workflows
 
-```
-User: Play "The Nonexistent Movie 9999"
-Claude: [Searches but finds nothing]
-Response: No movies found matching 'The Nonexistent Movie 9999'.
-```
+Library tools require `STREMIO_AUTH_KEY`. Library `add` and `remove` modify your Stremio account and require an explicit IMDb ID and type.
 
-### Missing Episode Information
+### List and search
 
-```
-User: Play Breaking Bad
-Claude: [Detects it's a TV show]
-Response: I found Breaking Bad, but I need to know which episode you want to watch. Please specify the season and episode number.
-Example: "Play Breaking Bad season 1 episode 1"
-```
+```text
+User: List my active Stremio library.
+Client: [Calls library with action="list"]
 
-### Connection Issues
+User: Search my library for Breaking Bad.
+Client: [Calls library with action="search", query="Breaking Bad"]
 
-```
-User: Play Inception
-Claude: [Attempts to send command but fails]
-Response: Found the movie but failed to play it on Android TV.
-Possible issues:
-- Android TV might be offline
-- ADB connection might be lost
-- Check if Stremio is installed
-
-Try running: adb connect YOUR_TV_IP:CONNECTION_PORT
+User: What am I currently watching?
+Client: [Calls library with action="continue"]
 ```
 
-## Workflow Examples
+### Check before changing
 
-### Movie Night Planning
-
-```
-User: Search for movies from 2023
-Claude: [Searches recent movies]
-Response: [Shows list of 2023 movies with IMDb IDs]
-
-User: Play the first one
-Claude: [Plays the movie]
-Response: Now playing: [Movie Title] (2023) on Stremio.
+```text
+User: Check movie tt1375666 in my library.
+Client: [Calls library with action="check", imdb_id="tt1375666"]
 ```
 
-### TV Show Marathon
+### Add or remove an item
 
-```
-User: I want to watch The Office from the beginning
-Claude: [Plays S01E01]
-Response: Now playing: The Office S01E01 on Stremio.
+```text
+User: Add movie tt1375666 to my Stremio library.
+Client: [Calls library with action="add", type="movie", imdb_id="tt1375666"]
 
-User: Keep playing the next episodes
-Claude: [You can continue requesting next episodes]
-```
-
-## Integration Examples
-
-### With Other MCP Servers
-
-If you have multiple MCP servers configured:
-
-```
-User: What's a good sci-fi movie to watch tonight?
-Claude: [Uses another MCP or built-in knowledge]
-Response: I'd recommend "Arrival" (2016) - it's a thought-provoking sci-fi about...
-
-User: Great! Play it on my TV
-Claude: [Uses Stremio MCP to play Arrival]
-Response: Now playing: Arrival (2016) on Stremio.
+User: Remove series tt0903747 from my Stremio library.
+Client: [Calls library with action="remove", type="series", imdb_id="tt0903747"]
 ```
 
-### Scheduled Viewing
+The server verifies library writes with a follow-up read. Removal is a soft delete that preserves existing watch state.
 
-```
-User: Remind me to watch The Crown S04E01 tonight
-Claude: [Sets reminder using another tool/service]
+### Play from the library
 
-Later...
-User: Play The Crown season 4 episode 1
-Claude: [Plays the episode]
-Response: Now playing: The Crown S04E01 on Stremio.
+```text
+User: Play Breaking Bad from my Stremio library.
+Client: [Calls play with query="Breaking Bad", type="tv", source="library"]
 ```
 
-## Tips for Best Results
+Library title search uses the first substring match. Search the library and confirm the title first when multiple items may match.
 
-### Be Specific
-```
-❌ "Play that movie with the guy"
-✅ "Play The Shawshank Redemption"
-```
+## Troubleshooting prompts
 
-### Include Year for Remakes
-```
-❌ "Play Dune"  (might get 1984 version)
-✅ "Play Dune from 2021"
+Use focused requests to identify which boundary is failing:
+
+```text
+Search for The Matrix.
 ```
 
-### Use Full Episode Info for TV
-```
-❌ "Play Breaking Bad"
-✅ "Play Breaking Bad season 1 episode 1"
-```
+If this fails, check `TMDB_API_KEY` and internet access.
 
-### Verify Search Results
-```
-✅ "Search for Inception" → Check results → "Play movie tt1375666"
+```text
+Play movie tt0133093.
 ```
 
-## Testing the Setup
+If search works but this fails, check `adb devices -l`, the TV endpoint, and whether Stremio is installed.
 
-### Verify Connection
-
-```
-User: Search for The Matrix
-Claude: [Searches TMDB]
-Response: [Returns search results]
-✅ TMDB API is working
-
-User: Play The Matrix
-Claude: [Sends ADB command]
-Response: Now playing...
-✅ ADB connection is working
-✅ Stremio is installed and configured
+```text
+List my Stremio library.
 ```
 
-### Troubleshooting Commands
+If only this fails, check `STREMIO_AUTH_KEY` and restart the MCP client after updating it.
 
-If something isn't working, you can ask Claude to help:
+## Tips
 
-```
-User: Why isn't Stremio responding?
-Claude: Let me help troubleshoot:
-
-1. Check if Android TV is reachable
-2. Verify ADB connection
-3. Check if Stremio is installed
-4. Verify configuration
-
-Try these commands in your terminal:
-- adb devices (should show your TV)
-- adb shell pm list packages | grep stremio (should show Stremio package)
-```
-
-## Common Patterns
-
-### Watch History
-
-```
-Session 1:
-User: Play Inception
-[Watches movie]
-
-Session 2 (later):
-User: What is currently playing?
-Claude: [Queries Android's media session]
-Response: Inception is playing at the current estimated position.
-
-Stremio remains responsible for saving and resuming watch progress.
-```
-
-### Multiple Users
-
-```
-User 1: Play a kids movie
-Claude: [Plays kid-friendly content]
-
-User 2: Play The Office
-Claude: [Switches to The Office]
-```
-
-## Limitations to Keep in Mind
-
-1. **Source Selection**: Stremio may open a source list that requires a `tv_control` select action.
-2. **Device-Dependent Status**: Position and duration depend on diagnostics exposed by the Android TV and player.
-3. **Requires Addons**: Content must be available through your Stremio addons.
-4. **No Queue Management**: The MCP cannot create playlists or queues.
-
-Use the physical remote or Stremio mobile app when the TV UI is not in the expected state.
+- Include a year for remakes.
+- Always specify season and episode for series.
+- Prefer search → confirm IMDb ID → play for ambiguous titles.
+- Keep library mutations explicit and review them before approval.
+- Use a physical remote if Stremio's focus is not where the automatic key press expects.

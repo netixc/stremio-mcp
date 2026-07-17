@@ -3,6 +3,9 @@
 
 set -e
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 echo "======================================"
 echo "Stremio MCP Server Setup"
 echo "======================================"
@@ -14,8 +17,7 @@ if ! command -v uv &> /dev/null; then
     echo ""
     curl -LsSf https://astral.sh/uv/install.sh | sh
     echo ""
-    echo "Please restart your terminal and run this script again."
-    echo "Or run: source $HOME/.cargo/env"
+    echo "Follow the PATH instructions printed by the uv installer, then run this script again."
     exit 0
 fi
 
@@ -30,10 +32,14 @@ fi
 
 PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
 echo "Found Python $PYTHON_VERSION"
+if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 10))'; then
+    echo "Error: Python 3.10 or higher is required"
+    exit 1
+fi
 
 echo ""
-echo "Step 1: Installing Python dependencies with uv..."
-uv sync
+echo "Step 1: Installing locked Python dependencies with uv..."
+uv sync --locked
 
 echo ""
 echo "Step 2: Setting up environment file..."
@@ -96,12 +102,11 @@ echo '   {
      "mcpServers": {
        "stremio": {
          "command": "uv",
-         "args": ["--directory", "'$(pwd)'", "run", "src/stremio_mcp.py"],
-         "env": {
-           "TMDB_API_KEY": "your_api_key",
-           "ANDROID_TV_HOST": "your_tv_ip",
-           "ANDROID_TV_PORT": "your_connection_port"
-         }
+         "args": [
+           "--directory", "'$(pwd)'",
+           "run", "--env-file", "'$(pwd)'/.env",
+           "src/stremio_mcp.py"
+         ]
        }
      }
    }'

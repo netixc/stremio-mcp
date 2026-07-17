@@ -46,7 +46,7 @@ STREMIO_AUTH_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6
 
 ### 7. Restart the MCP Server
 
-If the MCP server is already running in Claude Desktop, restart Claude Desktop to reload the configuration.
+Restart your MCP client so the server reloads its environment. For Claude Desktop, quit and reopen the application.
 
 ## What This Enables
 
@@ -63,7 +63,7 @@ With your auth key configured, you can:
 - Your auth key is like a password - keep it private
 - Don't share your `.env` file with anyone
 - The auth key permits library writes as well as reads; review add/remove requests carefully
-- The auth key is stored locally and never leaves your computer except to authenticate with Stremio's official API
+- The server sends the auth key only to Stremio's account API at `https://api.strem.io`; keep MCP client configuration and logs private
 - If you're concerned about security, you can skip this step and use the MCP server without library access
 
 ## Troubleshooting
@@ -82,14 +82,14 @@ Auth keys can expire. If library access stops working:
 2. Login again
 3. Get a new auth key using the same steps
 4. Update your `.env` file with the new key
-5. Restart Claude Desktop
+5. Restart or reload your MCP client
 
 ### Still Can't Access Library
 
 - Verify the auth key is correct in `.env`
 - Check that there are no extra spaces or quotes around the key
 - Make sure you saved the `.env` file
-- Restart Claude Desktop after making changes
+- Restart or reload your MCP client after making changes
 
 ## Alternative: Use Without Library Access
 
