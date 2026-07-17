@@ -2,7 +2,12 @@
 
 <!-- mcp-name: io.github.netixc/stremio-mcp -->
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/netixc/stremio-mcp/main/docs/assets/social-preview.png" alt="Stremio MCP connects an MCP client to Stremio on Android TV" width="100%">
+</p>
+
 [![CI](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/stremio-mcp-server.svg)](https://pypi.org/project/stremio-mcp-server/)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://github.com/netixc/stremio-mcp/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/netixc/stremio-mcp/blob/main/LICENSE)
 
@@ -30,10 +35,23 @@ A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server
 
 ## Installation
 
-> [!NOTE]
-> Version `0.1.0` is being prepared but is not published to PyPI yet. Use the source checkout until the first release is announced.
+### PyPI package (recommended)
 
-### Source checkout (currently available)
+Run the latest published release without cloning the repository:
+
+```bash
+uvx stremio-mcp-server
+```
+
+To run the current release explicitly:
+
+```bash
+uvx --from stremio-mcp-server==0.1.0 stremio-mcp-server
+```
+
+### Source checkout
+
+Use a source checkout for development or local modifications:
 
 ```bash
 git clone https://github.com/netixc/stremio-mcp.git
@@ -50,14 +68,6 @@ ANDROID_TV_HOST=192.168.1.100
 ANDROID_TV_PORT=37139
 STREMIO_AUTH_KEY=
 # ADB_PATH=/absolute/path/to/adb
-```
-
-### PyPI package (after the first release)
-
-Once `0.1.0` is published, the server will run without a checkout:
-
-```bash
-uvx stremio-mcp-server
 ```
 
 ## Pair and connect the TV
@@ -86,7 +96,26 @@ Claude Desktop configuration file locations:
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 - Linux: `~/.config/Claude/claude_desktop_config.json`
 
-### Source checkout (currently available)
+### PyPI package (recommended)
+
+Create a private environment file from the example above, then configure:
+
+```json
+{
+  "mcpServers": {
+    "stremio": {
+      "command": "uvx",
+      "args": [
+        "--env-file",
+        "/absolute/path/to/stremio.env",
+        "stremio-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+### Source checkout
 
 Replace both absolute paths:
 
@@ -102,25 +131,6 @@ Replace both absolute paths:
         "--env-file",
         "/absolute/path/to/stremio-mcp/.env",
         "stremio-mcp"
-      ]
-    }
-  }
-}
-```
-
-### PyPI package (after the first release)
-
-Create a private environment file from the example above, then configure:
-
-```json
-{
-  "mcpServers": {
-    "stremio": {
-      "command": "uvx",
-      "args": [
-        "--env-file",
-        "/absolute/path/to/stremio.env",
-        "stremio-mcp-server"
       ]
     }
   }
@@ -242,7 +252,7 @@ uv build
 
 See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTING.md) for the contribution workflow, [CHANGELOG.md](https://github.com/netixc/stremio-mcp/blob/main/CHANGELOG.md) for release notes, and [SECURITY.md](https://github.com/netixc/stremio-mcp/blob/main/SECURITY.md) for vulnerability reporting and credential-redaction guidance.
 
-`server.json` contains pre-publication metadata for the official MCP Registry. It intentionally refers to the future PyPI package and will not be published until the package exists and release artifacts have been reviewed.
+`server.json` is the metadata published to the [official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.netixc%2Fstremio-mcp) for `io.github.netixc/stremio-mcp`.
 
 ## Security
 
