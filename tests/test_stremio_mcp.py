@@ -75,6 +75,7 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
             ("play", {"imdb_id": "tt0000001"}, "ANDROID_TV_HOST"),
             ("library", {"action": "list"}, "STREMIO_AUTH_KEY"),
             ("tv_control", {"category": "power", "action": "status"}, "ANDROID_TV_HOST"),
+            ("playback_status", {}, "ANDROID_TV_HOST"),
         )
         for name, arguments, expected in cases:
             with self.subTest(name=name):
