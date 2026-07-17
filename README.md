@@ -11,9 +11,10 @@ An MCP (Model Context Protocol) server that allows you to control Stremio on you
 - **Playback Status**: Report the active title, state, estimated position, and duration when Android exposes them
 
 ### Library Access (Optional)
-- **Browse Your Library**: View all movies and TV shows in your Stremio library
+- **Browse Your Library**: View active or removed movies and TV shows
 - **Continue Watching**: See what you're currently watching
-- **Search Library**: Find specific titles in your library
+- **Search and Check**: Find titles or inspect one explicit IMDb ID
+- **Add and Remove**: Mutate explicitly identified items with verified Stremio datastore writes
 - **Play from Library**: Play content directly from your library
 
 ## How It Works
@@ -280,14 +281,22 @@ Play any content from TMDB search or your Stremio library.
 
 ### 3. **library** - Library Management
 Access and manage your Stremio library.
-- **list**: View all items in your library
-- **continue**: See what you're currently watching
-- **search**: Find specific titles in your library
+- **list**: View active items by default; set `active_only=false` to include removed rows
+- **continue**: See active items currently in progress
+- **search**: Find titles by substring
+- **check**: Inspect one explicit IMDb ID without writing
+- **add**: Add or re-add an explicit IMDb ID and verify persistence
+- **remove**: Soft-delete an explicit IMDb ID while preserving watch state
+
+`add` and `remove` require both `imdb_id` and `type` (`movie` or `series`; `tv` is accepted as an alias). Resolve ambiguous titles with `search` first—mutation actions never silently choose the first TMDB result.
 
 **Examples**:
 - "List my library"
 - "What am I currently watching?"
 - "Search my library for Breaking Bad"
+- "Check movie tt1375666 in my library"
+- "Add movie tt1375666 to my library"
+- "Remove movie tt1375666 from my library"
 
 ### 4. **tv_control** - Complete TV Control
 Control all aspects of your Android TV.

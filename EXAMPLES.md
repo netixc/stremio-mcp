@@ -137,6 +137,24 @@ The MCP server works with natural language, so you can phrase requests in many w
 "Play the latest episode of..." (you'll need to specify which episode)
 ```
 
+### Library Management by IMDb ID
+
+Mutation actions require an explicit IMDb ID so similarly named titles are never changed by accident.
+
+```
+User: Check movie tt1375666 in my library
+Claude: [Uses library action=check]
+Response: Inception is active in library (movie, IMDb: tt1375666).
+
+User: Remove movie tt1375666 from my library
+Claude: [Uses library action=remove and verifies the soft delete]
+Response: Inception: removed
+
+User: Add movie tt1375666 to my library
+Claude: [Fetches Cinemeta metadata, writes the item, and verifies it]
+Response: Inception: re-added
+```
+
 ## Error Handling Examples
 
 ### No Results Found

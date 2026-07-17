@@ -55,12 +55,14 @@ With your auth key configured, you can:
 - **Browse your library**: "Show me my Stremio library"
 - **Continue watching**: "What am I currently watching?"
 - **Search your library**: "Find Breaking Bad in my library"
+- **Add or remove explicit IMDb IDs**: "Add movie tt1375666 to my library"
 - **Play from library**: "Play Breaking Bad from my library"
 
 ## Security Notes
 
 - Your auth key is like a password - keep it private
 - Don't share your `.env` file with anyone
+- The auth key permits library writes as well as reads; review add/remove requests carefully
 - The auth key is stored locally and never leaves your computer except to authenticate with Stremio's official API
 - If you're concerned about security, you can skip this step and use the MCP server without library access
 
@@ -97,4 +99,4 @@ You don't need the auth key to use the core features:
 - Playing content on your Android TV
 - All playback controls
 
-The auth key is optional and only adds library browsing features.
+The auth key is optional and enables credentialed library reads and mutations.

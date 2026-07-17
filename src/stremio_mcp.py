@@ -4,6 +4,7 @@ Stremio MCP Server - Control Stremio on Android TV via ADB
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 import re
@@ -470,6 +471,7 @@ class StremioAPIClient:
     """Client for Stremio API to access user library"""
 
     API_URL = "https://api.strem.io"
+    CINEMETA_URL = "https://v3-cinemeta.strem.io"
 
     def __init__(self, auth_key: str):
         self.auth_key = auth_key
@@ -487,7 +489,8 @@ class StremioAPIClient:
             response = self.session.post(
                 f"{self.API_URL}/api/{method}",
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=15,
             )
             response.raise_for_status()
             data = response.json()
@@ -501,8 +504,37 @@ class StremioAPIClient:
             logger.error(f"Stremio API request failed: {e}")
             return {}
 
-    def get_library(self) -> list:
-        """Get user's library items"""
+    def _utc_now(self) -> str:
+        """Return an ISO-8601 UTC timestamp for Stremio datastore fields."""
+        return (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    def get_library_item(self, imdb_id: str) -> Optional[dict]:
+        """Get one library item by an explicit base IMDb ID."""
+        if not re.fullmatch(r"tt\d+", imdb_id):
+            return None
+
+        result = self._make_request("datastoreGet", {
+            "collection": "libraryItem",
+            "ids": [imdb_id],
+            "all": False
+        })
+        if isinstance(result, list):
+            return result[0] if result else None
+        if isinstance(result, dict):
+            items = result.get("libraryItem")
+            if isinstance(items, list):
+                return items[0] if items else None
+            if isinstance(items, dict):
+                return items
+        return None
+
+    def get_library(self, active_only: bool = False) -> list:
+        """Get user's library items, optionally excluding soft-deleted rows."""
         try:
             result = self._make_request("datastoreGet", {
                 "collection": "libraryItem",
@@ -515,6 +547,9 @@ class StremioAPIClient:
             elif isinstance(result, dict) and "libraryItem" in result:
                 items = result["libraryItem"]
 
+            if active_only:
+                items = [item for item in items if not item.get("removed")]
+
             logger.info(f"Retrieved {len(items)} library items")
             return items
         except Exception as e:
@@ -522,8 +557,8 @@ class StremioAPIClient:
             return []
 
     def get_continue_watching(self) -> list:
-        """Get items user is currently watching (not finished)"""
-        library = self.get_library()
+        """Get active items user is currently watching (not finished)."""
+        library = self.get_library(active_only=True)
         continue_watching = []
 
         for item in library:
@@ -544,9 +579,9 @@ class StremioAPIClient:
 
         return continue_watching
 
-    def search_library(self, query: str) -> list:
-        """Search user's library for matching titles"""
-        library = self.get_library()
+    def search_library(self, query: str, active_only: bool = True) -> list:
+        """Search user's library for matching titles."""
+        library = self.get_library(active_only=active_only)
         query_lower = query.lower()
 
         results = []
@@ -556,6 +591,130 @@ class StremioAPIClient:
                 results.append(item)
 
         return results
+
+    def fetch_cinemeta_meta(self, content_type: str, imdb_id: str) -> Optional[dict]:
+        """Fetch Stremio-compatible metadata for an explicit IMDb ID."""
+        if content_type not in {"movie", "series"}:
+            return None
+        try:
+            response = self.session.get(
+                f"{self.CINEMETA_URL}/meta/{content_type}/{imdb_id}.json",
+                timeout=15,
+            )
+            response.raise_for_status()
+            data = response.json()
+            meta = data.get("meta") if isinstance(data, dict) else None
+            return meta if isinstance(meta, dict) else None
+        except Exception as e:
+            logger.error(f"Failed to fetch Cinemeta metadata for {imdb_id}: {e}")
+            return None
+
+    def build_library_item(self, meta: dict, existing: Optional[dict] = None) -> dict:
+        """Build a libraryItem while preserving state when re-adding."""
+        now = self._utc_now()
+        behavior_hints = meta.get("behaviorHints") or {}
+        default_state = {
+            "lastWatched": None,
+            "timeWatched": 0,
+            "timeOffset": 0,
+            "overallTimeWatched": 0,
+            "timesWatched": 0,
+            "flaggedWatched": 0,
+            "duration": 0,
+            "video_id": None,
+            "watched": None,
+            "noNotif": False,
+        }
+        state = (existing.get("state") if existing else None) or default_state
+        return {
+            "_id": meta.get("id") or meta.get("imdb_id") or meta.get("_id"),
+            "name": meta.get("name", ""),
+            "type": meta.get("type", ""),
+            "poster": meta.get("poster"),
+            "posterShape": meta.get("posterShape") or "poster",
+            "removed": False,
+            "temp": False,
+            "_ctime": existing.get("_ctime", now) if existing else now,
+            "_mtime": now,
+            "state": state,
+            "behaviorHints": {
+                "defaultVideoId": behavior_hints.get("defaultVideoId"),
+                "featuredVideoId": behavior_hints.get("featuredVideoId"),
+                "hasScheduledVideos": bool(
+                    behavior_hints.get("hasScheduledVideos", False)
+                ),
+            },
+        }
+
+    def put_library_item(self, item: dict) -> bool:
+        """Write a library item and verify the resulting soft-delete state."""
+        imdb_id = item.get("_id")
+        if not isinstance(imdb_id, str) or not re.fullmatch(r"tt\d+", imdb_id):
+            return False
+
+        self._make_request("datastorePut", {
+            "collection": "libraryItem",
+            "changes": [item]
+        })
+        persisted = self.get_library_item(imdb_id)
+        return bool(
+            persisted
+            and persisted.get("_id") == imdb_id
+            and bool(persisted.get("removed")) == bool(item.get("removed"))
+            and persisted.get("type") == item.get("type")
+            and persisted.get("state") == item.get("state")
+        )
+
+    def add_to_library(
+        self, content_type: str, imdb_id: str
+    ) -> tuple[bool, str, Optional[dict]]:
+        """Add or re-add one explicitly identified movie or series."""
+        if content_type not in {"movie", "series"} or not re.fullmatch(
+            r"tt\d+", imdb_id
+        ):
+            return False, "invalid target", None
+
+        existing = self.get_library_item(imdb_id)
+        if existing and not existing.get("removed"):
+            return True, "already in library", existing
+
+        meta = self.fetch_cinemeta_meta(content_type, imdb_id)
+        if (
+            not meta
+            or (meta.get("id") or meta.get("imdb_id")) != imdb_id
+            or meta.get("type") != content_type
+        ):
+            return False, "metadata not found", None
+
+        item = self.build_library_item(meta, existing)
+        if self.put_library_item(item):
+            return True, "re-added" if existing else "added", item
+        return False, "write verification failed", item
+
+    def remove_from_library(
+        self, content_type: str, imdb_id: str
+    ) -> tuple[bool, str, Optional[dict]]:
+        """Soft-delete one explicitly identified library item."""
+        if content_type not in {"movie", "series"} or not re.fullmatch(
+            r"tt\d+", imdb_id
+        ):
+            return False, "invalid target", None
+
+        existing = self.get_library_item(imdb_id)
+        if not existing:
+            return False, "not found", None
+        if existing.get("type") != content_type:
+            return False, "type mismatch", existing
+        if existing.get("removed"):
+            return True, "already removed", existing
+
+        item = dict(existing)
+        item["removed"] = True
+        item["temp"] = False
+        item["_mtime"] = self._utc_now()
+        if self.put_library_item(item):
+            return True, "removed", item
+        return False, "write verification failed", item
 
 
 # Initialize server
@@ -661,18 +820,36 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="library",
-            description="Access Stremio library. Actions: list (all items), continue (currently watching), search (find by title).",
+            description=(
+                "Read or mutate the Stremio library. Add/remove require an "
+                "explicit IMDb ID and content type."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "continue", "search"],
-                        "description": "list, continue, or search"
+                        "enum": ["list", "continue", "search", "check", "add", "remove"],
+                        "description": "Library action to perform"
                     },
                     "query": {
                         "type": "string",
-                        "description": "Title to search (for search action)"
+                        "description": "Title substring for search"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["movie", "series", "tv"],
+                        "description": "Required for add/remove; tv is an alias for series"
+                    },
+                    "imdb_id": {
+                        "type": "string",
+                        "pattern": "^tt[0-9]+$",
+                        "description": "Explicit IMDb ID for check/add/remove"
+                    },
+                    "active_only": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Exclude soft-deleted items from list/search"
                     }
                 },
                 "required": ["action"]
@@ -860,31 +1037,33 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text="Error: STREMIO_AUTH_KEY not configured.")]
 
             action = arguments["action"]
+            active_only = arguments.get("active_only", True)
 
             if action == "list":
-                library = stremio_client.get_library()
+                library = stremio_client.get_library(active_only=active_only)
                 if not library:
                     return [TextContent(type="text", text="Your library is empty or unavailable.")]
 
                 output = [f"Found {len(library)} items:\n"]
                 for item in library[:20]:
-                    name = item.get("name", "Unknown")
+                    item_name = item.get("name", "Unknown")
                     content_type = item.get("type", "unknown")
-                    output.append(f"• {name} ({content_type})")
+                    item_status = "removed" if item.get("removed") else "active"
+                    output.append(f"• {item_name} ({content_type}, {item_status})")
 
                 if len(library) > 20:
                     output.append(f"\n... and {len(library) - 20} more")
 
                 return [TextContent(type="text", text="\n".join(output))]
 
-            elif action == "continue":
+            if action == "continue":
                 items = stremio_client.get_continue_watching()
                 if not items:
                     return [TextContent(type="text", text="No items currently in progress.")]
 
                 output = ["Currently watching:\n"]
                 for item in items:
-                    name = item.get("name", "Unknown")
+                    item_name = item.get("name", "Unknown")
                     content_type = item.get("type", "unknown")
                     state = item.get("state", {})
                     video_id = state.get("video_id", "")
@@ -893,29 +1072,87 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                         parts = video_id.split(":")
                         season = parts[1] if len(parts) > 1 else "?"
                         episode = parts[2] if len(parts) > 2 else "?"
-                        output.append(f"• {name} - S{season}E{episode}")
+                        output.append(f"• {item_name} - S{season}E{episode}")
                     else:
-                        output.append(f"• {name} ({content_type})")
+                        output.append(f"• {item_name} ({content_type})")
 
                 return [TextContent(type="text", text="\n".join(output))]
 
-            elif action == "search":
+            if action == "search":
                 query = arguments.get("query")
                 if not query:
                     return [TextContent(type="text", text="Search action requires 'query' parameter.")]
 
-                results = stremio_client.search_library(query)
+                results = stremio_client.search_library(
+                    query, active_only=active_only
+                )
                 if not results:
                     return [TextContent(type="text", text=f"No results for '{query}' in library.")]
 
                 output = [f"Found {len(results)} match(es):\n"]
                 for item in results:
-                    name = item.get("name", "Unknown")
+                    item_name = item.get("name", "Unknown")
                     content_type = item.get("type", "unknown")
                     imdb_id = item.get("_id", "").split(":")[0]
-                    output.append(f"• {name} ({content_type}) - IMDb: {imdb_id}")
+                    item_status = "removed" if item.get("removed") else "active"
+                    output.append(
+                        f"• {item_name} ({content_type}, {item_status}) - IMDb: {imdb_id}"
+                    )
 
                 return [TextContent(type="text", text="\n".join(output))]
+
+            imdb_id = arguments.get("imdb_id", "")
+            if not re.fullmatch(r"tt\d+", imdb_id):
+                return [TextContent(
+                    type="text",
+                    text=f"Error: {action} requires an explicit valid imdb_id."
+                )]
+
+            if action == "check":
+                item = stremio_client.get_library_item(imdb_id)
+                if not item:
+                    return [TextContent(
+                        type="text", text=f"Not found in library: {imdb_id}"
+                    )]
+                item_status = "removed" if item.get("removed") else "active"
+                return [TextContent(
+                    type="text",
+                    text=(
+                        f"{item.get('name', imdb_id)} is {item_status} in library "
+                        f"({item.get('type', 'unknown')}, IMDb: {imdb_id})."
+                    )
+                )]
+
+            content_type = arguments.get("type")
+            if content_type == "tv":
+                content_type = "series"
+            if content_type not in {"movie", "series"}:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: {action} requires type='movie' or type='series'."
+                )]
+
+            if action == "add":
+                success, result_status, item = stremio_client.add_to_library(
+                    content_type, imdb_id
+                )
+            elif action == "remove":
+                success, result_status, item = stremio_client.remove_from_library(
+                    content_type, imdb_id
+                )
+            else:
+                return [TextContent(
+                    type="text", text=f"Unknown library action: {action}"
+                )]
+
+            item_name = item.get("name", imdb_id) if item else imdb_id
+            if not success:
+                return [TextContent(
+                    type="text", text=f"Failed to {action} {item_name}: {result_status}"
+                )]
+            return [TextContent(
+                type="text", text=f"{item_name}: {result_status}"
+            )]
 
         elif name == "tv_control":
             if not controller:

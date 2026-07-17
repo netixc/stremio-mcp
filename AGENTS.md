@@ -21,7 +21,8 @@ Run commands from the repository root with Python 3.10+ and `uv` installed.
 
 - `pyproject.toml` and `uv.lock` are the install and CI dependency sources. Keep them synchronized when dependencies change; do not treat the unpinned `requirements.txt` as the locked environment.
 - Runtime configuration is read from environment variables when `src/stremio_mcp.py` is imported. `TMDB_API_KEY` enables network search, `STREMIO_AUTH_KEY` enables credentialed library access, and `ANDROID_TV_HOST` enables commands to a physical Android TV.
-- Do not run live MCP calls or ADB commands with real configuration as routine verification: search and library calls contact external services, while playback, navigation, volume, and power calls mutate a physical device.
+- Do not run live MCP calls or ADB commands with real configuration as routine verification: search and library reads contact external services; library add/remove mutates the user's Stremio account; playback, navigation, volume, and power mutate a physical device.
+- Library mutations require an explicit IMDb ID and content type, use `_id` for Stremio datastore identity, preserve watch state on re-add/remove, and verify each write with a follow-up read. Cover these boundaries with mocks; never use a real account for routine tests.
 - Native `adb` is the transport boundary. Modern Android Wireless Debugging uses TLS (`STLS`), which the former `adb-shell` dependency did not support; do not replace native ADB with a client that lacks this protocol.
 - Wireless Debugging exposes separate, often ephemeral pairing and connection ports. Never assume the pairing port is the runtime port or that modern devices use legacy port `5555`.
 - A series deep link requires both season and episode; movies and series use different Stremio URI forms. Preserve this distinction and cover dispatch or URI changes with mocked tests.
