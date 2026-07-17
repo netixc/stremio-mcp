@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - ".github/workflows/publish.yml"
       - ".github/workflows/release.yml"
       - "CHANGELOG.md"
       - "README.md"
