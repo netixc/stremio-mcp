@@ -105,10 +105,6 @@ Restart the MCP client after changing configuration. The server reads its enviro
 
 You can instead place the variables directly in the client configuration's `env` object. This avoids `.env`, but the client configuration then contains secrets and should remain private.
 
-#### Pi
-
-Pi does not include MCP support in core. Install an adapter such as [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter), add the same server definition to a supported MCP configuration file, and run `/reload`. Keep credentials in a private user-level file.
-
 ## Configuration
 
 | Variable | Required for | Sensitive | Description |
