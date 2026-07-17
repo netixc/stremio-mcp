@@ -923,6 +923,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text=msg)]
 
         elif name == "playback_status":
+            if not controller:
+                return [TextContent(type="text", text="Error: ANDROID_TV_HOST not configured.")]
+
             status = await controller.get_playback_status()
 
             if not status["app"]:
