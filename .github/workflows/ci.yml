@@ -32,3 +32,6 @@ jobs:
         run: uv run --locked --python "${{ matrix.python-version }}" python -m unittest discover -s tests -v
       - name: Compile Python sources
         run: uv run --locked --python "${{ matrix.python-version }}" python -m compileall -q src tests
+      - name: Build package artifacts
+        if: matrix.python-version == '3.12'
+        run: uv build
