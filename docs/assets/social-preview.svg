@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">netixc/stremio-mcp</title>
+  <desc id="desc">Control Stremio on Android TV from an MCP client.</desc>
+
+  <rect width="1280" height="640" fill="#FFFFFF"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="80" y="170" fill="#24292F" font-size="60" font-weight="400" letter-spacing="-1.5">netixc/<tspan font-weight="700">stremio-mcp</tspan></text>
+
+    <text x="80" y="258" fill="#66707D" font-size="31" font-weight="400">Control Stremio on Android TV from your MCP client.</text>
+
+    <g transform="translate(80 340)">
+      <rect width="600" height="64" rx="32" fill="#F5F2FF"/>
+      <text x="90" y="41" fill="#6E4DE6" font-size="21" font-weight="600" text-anchor="middle">MCP client</text>
+      <path d="M160 32H210" stroke="#9C8BE1" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M202 24L212 32L202 40" fill="none" stroke="#9C8BE1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="300" y="41" fill="#6E4DE6" font-size="21" font-weight="600" text-anchor="middle">Stremio MCP</text>
+      <path d="M390 32H440" stroke="#9C8BE1" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M432 24L442 32L432 40" fill="none" stroke="#9C8BE1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="510" y="41" fill="#6E4DE6" font-size="21" font-weight="600" text-anchor="middle">Android TV</text>
+    </g>
+
+    <text x="80" y="524" fill="#8C959F" font-size="20" font-weight="500">PYTHON  ·  TMDB  ·  NATIVE ADB</text>
+  </g>
+
+  <g transform="translate(982 106)">
+    <rect width="190" height="190" rx="46" fill="#7657E8"/>
+    <path d="M76 52L139 95L76 138Z" fill="#FFFFFF"/>
+  </g>
+
+  <rect x="0" y="630" width="1280" height="10" fill="#7657E8"/>
+</svg>
