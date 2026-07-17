@@ -3,8 +3,8 @@
 <!-- mcp-name: io.github.netixc/stremio-mcp -->
 
 [![CI](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](pyproject.toml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://github.com/netixc/stremio-mcp/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/netixc/stremio-mcp/blob/main/LICENSE)
 
 A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for searching TMDB, opening Stremio content on Android TV, controlling playback over ADB, and optionally accessing your Stremio library.
 
@@ -26,11 +26,14 @@ A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb`)
 - A free [TMDB API key](https://www.themoviedb.org/settings/api) for title search
-- Optional: a [Stremio auth key](GET_AUTH_KEY.md) for library access
+- Optional: a [Stremio auth key](https://github.com/netixc/stremio-mcp/blob/main/docs/stremio-auth-key.md) for library access
 
-## Quick start
+## Installation
 
-### 1. Install the project
+> [!NOTE]
+> Version `0.1.0` is being prepared but is not published to PyPI yet. Use the source checkout until the first release is announced.
+
+### Source checkout (currently available)
 
 ```bash
 git clone https://github.com/netixc/stremio-mcp.git
@@ -49,15 +52,19 @@ STREMIO_AUTH_KEY=
 # ADB_PATH=/absolute/path/to/adb
 ```
 
-A convenience script is also available as `./setup.sh`. It installs `uv` with uv's official installer when `uv` is missing, so inspect the script first if you prefer not to run remote installers.
+### PyPI package (after the first release)
 
-The checkout exposes an installable `stremio-mcp` command through `uv`. PyPI and MCP Registry metadata are prepared but **not published yet**, so continue using the source-checkout instructions until a release is announced.
+Once `0.1.0` is published, the server will run without a checkout:
 
-### 2. Pair and connect the TV
+```bash
+uvx stremio-mcp-server
+```
+
+## Pair and connect the TV
 
 On the TV, enable **Developer options** and **Wireless debugging**. Menu names vary by manufacturer.
 
-Modern Wireless Debugging displays two different ports:
+Modern Wireless Debugging displays separate pairing and connection ports:
 
 ```bash
 adb pair TV_IP:PAIRING_PORT
@@ -71,17 +78,17 @@ Set `ANDROID_TV_PORT` to the **connection port**, not the temporary pairing port
 
 Legacy network debugging may use port `5555`; only use it when your TV explicitly documents that workflow.
 
-### 3. Configure your MCP client
+## Configure your MCP client
 
-#### Claude Desktop
-
-Configuration file locations:
+Claude Desktop configuration file locations:
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 - Linux: `~/.config/Claude/claude_desktop_config.json`
 
-Add the server, replacing both absolute paths:
+### Source checkout (currently available)
+
+Replace both absolute paths:
 
 ```json
 {
@@ -101,9 +108,26 @@ Add the server, replacing both absolute paths:
 }
 ```
 
-Restart the MCP client after changing configuration. The server reads its environment when the process starts.
+### PyPI package (after the first release)
 
-You can instead place the variables directly in the client configuration's `env` object. This avoids `.env`, but the client configuration then contains secrets and should remain private.
+Create a private environment file from the example above, then configure:
+
+```json
+{
+  "mcpServers": {
+    "stremio": {
+      "command": "uvx",
+      "args": [
+        "--env-file",
+        "/absolute/path/to/stremio.env",
+        "stremio-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+Restart the MCP client after changing configuration. You can instead place the variables directly in the client configuration's `env` object, but that file must remain private.
 
 ## Configuration
 
@@ -141,7 +165,7 @@ Search my Stremio library for Severance.
 Add movie tt1375666 to my library.
 ```
 
-See [EXAMPLES.md](EXAMPLES.md) for accurate tool-level workflows and safer search-then-play examples.
+See the [usage examples](https://github.com/netixc/stremio-mcp/blob/main/docs/examples.md) for accurate tool-level workflows and safer search-then-play examples.
 
 ## Verify the setup
 
@@ -183,7 +207,7 @@ adb devices -l
 
 - Confirm the relevant key is present and has no quotes or extra spaces.
 - Restart the MCP client after editing `.env`.
-- Renew an expired Stremio key using [GET_AUTH_KEY.md](GET_AUTH_KEY.md).
+- Renew an expired Stremio key using the [auth-key guide](https://github.com/netixc/stremio-mcp/blob/main/docs/stremio-auth-key.md).
 
 ## Limitations
 
@@ -216,7 +240,7 @@ uv run --locked python -m compileall -q src tests
 uv build
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, [CHANGELOG.md](CHANGELOG.md) for release notes, and [SECURITY.md](SECURITY.md) for vulnerability reporting and credential-redaction guidance.
+See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTING.md) for the contribution workflow, [CHANGELOG.md](https://github.com/netixc/stremio-mcp/blob/main/CHANGELOG.md) for release notes, and [SECURITY.md](https://github.com/netixc/stremio-mcp/blob/main/SECURITY.md) for vulnerability reporting and credential-redaction guidance.
 
 `server.json` contains pre-publication metadata for the official MCP Registry. It intentionally refers to the future PyPI package and will not be published until the package exists and release artifacts have been reviewed.
 
@@ -230,6 +254,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, [CHANGELOG
 
 ## License and disclaimer
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [MIT License](https://github.com/netixc/stremio-mcp/blob/main/LICENSE).
 
 This project is not affiliated with or endorsed by Stremio, TMDB, or Anthropic. It does not provide media or bypass Stremio addon requirements. Use it only with devices and accounts you are authorized to control.

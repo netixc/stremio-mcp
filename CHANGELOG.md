@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once releases are published.
 
-## [1.0.0] - Unreleased
+## [0.1.0] - Unreleased
 
 ### Added
 
@@ -20,4 +20,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Library mutations require an explicit IMDb ID and content type.
 - Credentials, device details, and ADB keys are excluded from version control and documented as sensitive.
 
-[1.0.0]: https://github.com/netixc/stremio-mcp/releases/tag/v1.0.0
+[0.1.0]: https://github.com/netixc/stremio-mcp/releases/tag/v0.1.0

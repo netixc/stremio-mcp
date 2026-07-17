@@ -19,7 +19,7 @@ Run commands from the repository root with Python 3.10+ and `uv` installed.
 
 ## Project-specific constraints
 
-- `pyproject.toml` and `uv.lock` are the install and CI dependency sources. Keep them synchronized when dependencies change; do not treat the unpinned `requirements.txt` as the locked environment.
+- `pyproject.toml` and `uv.lock` are the install and CI dependency sources. Keep them synchronized when dependencies change.
 - Runtime configuration is read from environment variables when `src/stremio_mcp.py` is imported. `TMDB_API_KEY` enables network search, `STREMIO_AUTH_KEY` enables credentialed library access, and `ANDROID_TV_HOST` enables commands to a physical Android TV.
 - Do not run live MCP calls or ADB commands with real configuration as routine verification: search and library reads contact external services; library add/remove mutates the user's Stremio account; playback, navigation, volume, and power mutate a physical device.
 - Library mutations require an explicit IMDb ID and content type, use `_id` for Stremio datastore identity, preserve watch state on re-add/remove, and verify each write with a follow-up read. Cover these boundaries with mocks; never use a real account for routine tests.
@@ -33,4 +33,4 @@ Run commands from the repository root with Python 3.10+ and `uv` installed.
 
 - `.github/workflows/ci.yml` — canonical CI commands and supported Python versions.
 - `README.md` — runtime setup, environment activation, and MCP client configuration.
-- `GET_AUTH_KEY.md` — credential handling and library-access setup; never commit an auth key or `.env`.
+- `docs/stremio-auth-key.md` — credential handling and library-access setup; never commit an auth key or `.env`.

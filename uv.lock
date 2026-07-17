@@ -973,18 +973,16 @@ wheels = [
 
 [[package]]
 name = "stremio-mcp-server"
-version = "1.0.0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
-    { name = "python-dotenv" },
     { name = "requests" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.28.1" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "requests", specifier = ">=2.33.0" },
 ]
 

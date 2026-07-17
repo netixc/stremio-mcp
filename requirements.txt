@@ -1,8 +1,0 @@
-# MCP Server Framework
-mcp>=1.28.1
-
-# HTTP Requests for TMDB API
-requests>=2.33.0
-
-# Environment Variable Management
-python-dotenv>=1.2.2
