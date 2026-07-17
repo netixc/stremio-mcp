@@ -4,12 +4,11 @@ An MCP (Model Context Protocol) server that allows you to control Stremio on you
 
 ## Features
 
-### Playback Control
-- **Search Content**: Find movies and TV shows by title (via TMDB)
-- **Play Movies**: Instantly play movies on your Android TV
-- **Play TV Episodes**: Play specific episodes of TV shows
-- **One-Command Playback**: Search and play in a single command
-- **Deep Link Integration**: Uses Stremio's native deep linking for seamless playback
+### Playback and TV Control
+- **Search Content**: Find movies and TV shows by title through TMDB
+- **Open Movies and Episodes**: Deep-link directly to Stremio content
+- **Remote Control**: Navigate, select sources, control playback and volume, and manage power
+- **Playback Status**: Report the active title, state, estimated position, and duration when Android exposes them
 
 ### Library Access (Optional)
 - **Browse Your Library**: View all movies and TV shows in your Stremio library
@@ -19,26 +18,26 @@ An MCP (Model Context Protocol) server that allows you to control Stremio on you
 
 ## How It Works
 
-This MCP server combines three technologies:
+This MCP server combines four technologies:
 
-1. **TMDB API** - Searches for movies/TV shows and gets their IMDb IDs
-2. **Stremio Deep Links** - Constructs URLs to open specific content pages
-3. **ADB (Android Debug Bridge)** - Sends commands to your Android TV
-4. **Remote Control Simulation** - Automatically presses the "Play" button for you
+1. **TMDB API** - Searches for movies and TV shows and resolves IMDb IDs
+2. **Stremio API** - Optionally reads your library with an auth key
+3. **Stremio Deep Links** - Opens a movie or specific episode on the TV
+4. **Native ADB** - Connects with modern Wireless Debugging and sends remote-control commands
 
-The server opens the movie/show page in Stremio, then simulates pressing the center/OK button on your remote to start playback automatically.
+The `play` tool opens the content page and presses center after a short delay. If Stremio displays a source list, select a source with the `tv_control` tool (or your physical remote). Playback status is derived from Android media-session and extractor diagnostics, so availability can vary by device and Stremio version.
 
 ## Prerequisites
 
 ### 1. Android TV Setup
 
-Enable ADB debugging on your Android TV:
+Enable ADB debugging on your Android TV (menu names vary by vendor):
 
-1. Go to **Settings** > **Device Preferences** > **About**
-2. Click on **Build** 7 times to enable Developer Mode
-3. Go back to **Device Preferences** > **Developer Options**
-4. Enable **USB Debugging** and **Network Debugging**
-5. Note your Android TV's IP address (Settings > Network & Internet > Your Network)
+1. Go to **Settings** > **Device Preferences** > **About**.
+2. Select **Build** seven times to enable Developer Options.
+3. Open **Developer Options**.
+4. Enable **USB debugging** and either **Wireless debugging** or the vendor's legacy **Network debugging** option.
+5. Note the TV IP address. Modern Wireless Debugging also displays separate pairing and connection ports.
 
 ### 2. TMDB API Key
 
@@ -139,23 +138,30 @@ Edit `.env` and add your configuration:
 ```bash
 TMDB_API_KEY=your_tmdb_api_key_here
 ANDROID_TV_HOST=192.168.1.100  # Your Android TV's IP address
-ANDROID_TV_PORT=5555
+ANDROID_TV_PORT=37139          # Connection port shown by Wireless Debugging
+STREMIO_AUTH_KEY=              # Optional; enables library access
+# ADB_PATH=/absolute/path/to/adb  # Optional when adb is not on PATH
 ```
 
-### 4. Connect to Android TV (First Time Setup)
+### 4. Pair and Connect to Android TV
 
-**Note**: Make sure you have ADB installed (see Prerequisites section above).
-
-The first time you connect, you need to pair your computer with Android TV:
+Modern Wireless Debugging uses two different ports. On the TV, choose **Pair device with pairing code**, then run:
 
 ```bash
-# Connect to Android TV
-adb connect YOUR_ANDROID_TV_IP:5555
+adb pair TV_IP:PAIRING_PORT
+# Enter the temporary six-digit code shown by the TV.
+
+adb connect TV_IP:CONNECTION_PORT
+adb devices -l
 ```
 
-You should see a popup on your Android TV asking to authorize the connection. Click "Allow".
+Use the main connection port shown on the Wireless Debugging screen for `ANDROID_TV_PORT`; do not reuse the temporary pairing port. These ports can change after Wireless Debugging is toggled or the TV reboots.
 
-### 5. Configure MCP in Claude Desktop
+For a device that explicitly provides legacy network debugging, connect to its documented port (commonly `5555`) and approve the authorization prompt on the TV.
+
+### 5. Configure an MCP Client
+
+#### Claude Desktop
 
 Add this to your Claude Desktop configuration file:
 
@@ -177,7 +183,7 @@ Add this to your Claude Desktop configuration file:
       "env": {
         "TMDB_API_KEY": "your_tmdb_api_key_here",
         "ANDROID_TV_HOST": "192.168.1.100",
-        "ANDROID_TV_PORT": "5555",
+        "ANDROID_TV_PORT": "your_connection_port",
         "STREMIO_AUTH_KEY": "your_stremio_auth_key_here"
       }
     }
@@ -188,6 +194,10 @@ Add this to your Claude Desktop configuration file:
 Replace `/absolute/path/to/stremio-mcp` with the actual path to this project.
 
 **Note**: Using `uv run` ensures dependencies are automatically managed and the correct Python environment is used.
+
+#### Pi
+
+Pi does not include MCP support in core. Install an MCP adapter such as [`pi-mcp-adapter`](https://www.npmjs.com/package/pi-mcp-adapter), then add the same server definition to a supported MCP configuration file such as `.mcp.json` or `~/.config/mcp/mcp.json`. Keep real credentials in a private user-level configuration or environment file rather than committing them to the repository. Run `/reload` after changing the configuration.
 
 ## Validation
 
@@ -203,7 +213,7 @@ The unit tests use mocks for dispatch boundaries and do not contact TMDB, Stremi
 
 ## Usage
 
-Once configured, you can use natural language commands in Claude:
+Once configured, you can use natural-language commands in your MCP client:
 
 ### Search for Content
 
@@ -308,22 +318,24 @@ Check what's currently playing on your Android TV.
 
 ### Connection Issues
 
-**Problem**: Can't connect to Android TV
+**Problem**: The TV is unreachable, offline, or reports `No route to host`.
 
 **Solutions**:
-- Ensure your computer and Android TV are on the same WiFi network
-- Check that ADB debugging is enabled on Android TV
-- Try reconnecting: `adb disconnect && adb connect YOUR_TV_IP:5555`
-- Restart ADB server: `adb kill-server && adb start-server`
+- Confirm the computer and TV are on the same LAN and that client isolation is disabled.
+- Verify the TV IP and current Wireless Debugging **connection** port; do not use the pairing port.
+- Run `adb disconnect TV_IP:PORT`, `adb connect TV_IP:PORT`, and `adb devices -l`. The device must show `device`, not `offline` or `unauthorized`.
+- Restart the local daemon with `adb kill-server && adb start-server`.
+- On macOS, allow the terminal or MCP host under **System Settings > Privacy & Security > Local Network** if ordinary network probes work but native `adb` reports routing errors.
 
 ### ADB Authorization
 
-**Problem**: "Unauthorized" error
+**Problem**: The device is unauthorized or modern Wireless Debugging will not connect.
 
 **Solution**:
-- A popup should appear on your TV asking to authorize the connection
-- Check your TV screen and click "Allow"
-- Make sure to check "Always allow from this computer"
+- For modern Wireless Debugging, run `adb pair TV_IP:PAIRING_PORT` with a fresh code before connecting to the separate main port.
+- Keep the pairing dialog open until ADB confirms success.
+- For legacy debugging, approve the authorization popup and select **Always allow from this computer**.
+- If pairing state is stale, forget the computer under the TV's paired devices and pair again.
 
 ### Stremio Not Opening
 
@@ -368,19 +380,16 @@ stremio:///detail/movie/{imdb_id}/{imdb_id}
 stremio:///detail/series/{imdb_id}/{imdb_id}:{season}:{episode}
 ```
 
-These links are sent to Android TV via ADB, which tells Android to open Stremio at the content page. Then, the server simulates pressing the remote's center/OK button (keycode 23) to automatically start playback.
-
-**Note**: Stremio's `autoPlay` parameter only works for content you've previously watched, so this MCP uses remote button simulation instead for reliable playback.
+These links are sent through native ADB, which tells Android to open Stremio at the content page. The server then presses center (keycode 23) after 2.5 seconds. Depending on Stremio state, this may resume known content or open the source selector; use `tv_control` to choose a source when required.
 
 ## Limitations
 
-- **Android TV Only**: This server is specifically designed for Android TV
-- **Timing Dependent**: The automatic play uses a 2.5 second delay which may need adjustment
-- **No Playback Control**: Can't pause, stop, or query current playback status
-- **Requires Addons**: You must have working Stremio addons configured
-- **One-Way Communication**: Can send commands but can't get feedback from Stremio
-- **Network Required**: Computer and Android TV must be on same network
-- **UI State Dependent**: If Stremio's UI layout changes, the button press might not work
+- **Android TV only**: The transport and commands target Android TV.
+- **Source selection**: Addons determine stream availability, and a source may need to be selected after `play` opens the title.
+- **Timing and focus**: The automatic center press assumes Stremio loads within 2.5 seconds and focuses the expected control.
+- **Device-dependent status**: Position is extrapolated from Android's media-session clock and duration falls back to recent extractor metadata. Some devices or players may omit these diagnostics.
+- **Ephemeral ports**: Modern Wireless Debugging connection ports can change after toggles or reboots.
+- **Network required**: The MCP host and TV must be able to reach each other on the local network.
 
 ## Advanced Usage
 
@@ -396,22 +405,23 @@ adb shell am start -a android.intent.action.VIEW -d "stremio:///detail/movie/tt0
 adb shell am start -a android.intent.action.VIEW -d "stremio:///detail/series/tt0903747/tt0903747:1:1?autoPlay=true"
 ```
 
-### Using over WiFi
+### Wireless Debugging
 
-ADB can work wirelessly:
+Prefer Android's modern pairing flow:
 
 ```bash
-# Connect via WiFi (after initial USB connection)
-adb tcpip 5555
-adb connect YOUR_TV_IP:5555
+adb pair TV_IP:PAIRING_PORT
+adb connect TV_IP:CONNECTION_PORT
 ```
+
+`adb tcpip 5555` is a legacy workflow that usually requires an initial USB-authorized connection and may reset after reboot. Use it only when your TV does not provide modern Wireless Debugging.
 
 ### Multiple Android TVs
 
 You can configure multiple Android TVs by specifying the device:
 
 ```bash
-adb -s 192.168.1.100:5555 shell am start ...
+adb -s TV_IP:CONNECTION_PORT shell am start ...
 ```
 
 ## Security Notes
@@ -425,8 +435,7 @@ adb -s 192.168.1.100:5555 shell am start ...
 
 Contributions are welcome! Some ideas for improvements:
 
-- Add support for querying current playback
-- Implement pause/resume/stop controls
+- Improve playback metadata portability across Android TV vendors
 - Add support for playlists
 - Browse Stremio catalogs
 - Better error handling and recovery
@@ -440,7 +449,6 @@ MIT License - See LICENSE file for details
 - [Stremio](https://www.stremio.com/) - Amazing media center
 - [TMDB](https://www.themoviedb.org/) - Comprehensive movie database
 - [MCP](https://modelcontextprotocol.io/) - Model Context Protocol by Anthropic
-- [adb-shell](https://github.com/JeffLIrion/adb_shell) - Pure Python ADB implementation
 
 ## Support
 

@@ -1,10 +1,6 @@
 # MCP Server Framework
 mcp>=1.28.1
 
-# ADB Communication
-adb-shell>=0.4.4
-pycryptodome>=3.19.0
-
 # HTTP Requests for TMDB API
 requests>=2.33.0
 

@@ -167,7 +167,7 @@ Possible issues:
 - ADB connection might be lost
 - Check if Stremio is installed
 
-Try running: adb connect YOUR_TV_IP:5555
+Try running: adb connect YOUR_TV_IP:CONNECTION_PORT
 ```
 
 ## Workflow Examples
@@ -293,9 +293,11 @@ User: Play Inception
 [Watches movie]
 
 Session 2 (later):
-User: Continue where I left off
-Claude: Note - This MCP can start content but cannot track playback position.
-Stremio should remember your position automatically when you open it.
+User: What is currently playing?
+Claude: [Queries Android's media session]
+Response: Inception is playing at the current estimated position.
+
+Stremio remains responsible for saving and resuming watch progress.
 ```
 
 ### Multiple Users
@@ -310,9 +312,9 @@ Claude: [Switches to The Office]
 
 ## Limitations to Keep in Mind
 
-1. **Cannot Control Playback**: Once content starts, you cannot pause/resume via MCP
-2. **No Status Queries**: Cannot ask "what's currently playing?"
-3. **Requires Addons**: Content must be available in your Stremio addons
-4. **No Queue Management**: Cannot create playlists or queues
+1. **Source Selection**: Stremio may open a source list that requires a `tv_control` select action.
+2. **Device-Dependent Status**: Position and duration depend on diagnostics exposed by the Android TV and player.
+3. **Requires Addons**: Content must be available through your Stremio addons.
+4. **No Queue Management**: The MCP cannot create playlists or queues.
 
-For these features, you'll need to use your Android TV remote or Stremio's mobile app.
+Use the physical remote or Stremio mobile app when the TV UI is not in the expected state.

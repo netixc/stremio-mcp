@@ -87,6 +87,110 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response[0].text, "Unknown tool: not-a-tool")
 
 
+class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_uses_native_adb_for_configured_target(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller._run_adb = AsyncMock(
+            return_value=(0, "connected to test.invalid:37139", "")
+        )
+
+        self.assertTrue(await controller.connect())
+
+        controller._run_adb.assert_awaited_once_with(
+            "connect", "test.invalid:37139"
+        )
+        self.assertEqual(controller.device, "test.invalid:37139")
+
+    async def test_send_shell_command_targets_connected_device(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_adb = AsyncMock(return_value=(0, "state=ON\n", ""))
+
+        result = await controller.send_shell_command("dumpsys power")
+
+        self.assertEqual(result, "state=ON")
+        controller._run_adb.assert_awaited_once_with(
+            "-s", "test.invalid:37139", "shell", "dumpsys power"
+        )
+
+    async def test_tv_state_supports_android_wakefulness_output(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.send_shell_command = AsyncMock(
+            return_value="mWakefulness=Awake\nmWakefulnessChanging=false"
+        )
+
+        self.assertEqual(await controller.get_tv_state(), "on")
+        controller.send_shell_command.assert_awaited_once_with("dumpsys power")
+
+    async def test_playback_status_supports_named_android_state(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.send_shell_command = AsyncMock(
+            return_value=(
+                "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
+                "  active=true\n"
+                "  state=PlaybackState {state=PLAYING(3), position=5796, "
+                "buffered position=12000, speed=1.0}\n"
+                "  metadata: size=4, description=Inception, null, null"
+            )
+        )
+
+        status = await controller.get_playback_status()
+
+        self.assertTrue(status["playing"])
+        self.assertEqual(status["state"], "playing")
+        self.assertEqual(status["position"], 5796)
+        self.assertIsNone(status["duration"])
+        self.assertEqual(status["title"], "Inception")
+
+    async def test_playback_status_estimates_position_and_extractor_duration(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.send_shell_command = AsyncMock(
+            side_effect=[
+                (
+                    "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
+                    "  active=true\n"
+                    "  state=PlaybackState {state=PLAYING(3), position=5796, "
+                    "buffered position=0, speed=1.0, updated=907375568}\n"
+                    "  metadata: size=4, description=Inception, null, null\n"
+                    "    BluetoothMediaBrowserService com.android.bluetooth/Service (userId=0)\n"
+                    "      active=true\n"
+                    "      state=PlaybackState {state=ERROR(7), position=0, "
+                    "buffered position=0, speed=0.0, updated=128501}"
+                ),
+                "907573.69 2452711.11",
+                (
+                    "Recent extractors, most recent first:\n"
+                    "track {mime: video/hevc, dura: (int64_t) 8887891384}"
+                ),
+            ]
+        )
+
+        status = await controller.get_playback_status()
+
+        self.assertEqual(status["position"], 203918)
+        self.assertEqual(status["duration"], 8887891)
+
+    async def test_send_intent_passes_uri_as_a_distinct_adb_argument(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_adb = AsyncMock(return_value=(0, "Starting: Intent", ""))
+        uri = "stremio:///detail/movie/tt1375666/tt1375666"
+
+        self.assertTrue(await controller.send_intent(uri))
+
+        controller._run_adb.assert_awaited_once_with(
+            "-s",
+            "test.invalid:37139",
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.VIEW",
+            "-d",
+            uri,
+        )
+
+
 class DeepLinkTests(unittest.IsolatedAsyncioTestCase):
     async def test_series_deep_link_is_built_without_adb(self):
         controller = stremio_mcp.StremioController("test.invalid")

@@ -75,10 +75,11 @@ echo "   nano .env"
 echo ""
 echo "2. Enable ADB debugging on your Android TV:"
 echo "   Settings > Device Preferences > About > Build (tap 7 times)"
-echo "   Settings > Device Preferences > Developer Options > Enable USB & Network Debugging"
+echo "   Settings > Device Preferences > Developer Options > Enable USB & Wireless/Network Debugging"
 echo ""
-echo "3. Connect to your Android TV:"
-echo "   adb connect YOUR_TV_IP:5555"
+echo "3. Pair and connect to your Android TV (modern Wireless Debugging):"
+echo "   adb pair YOUR_TV_IP:PAIRING_PORT"
+echo "   adb connect YOUR_TV_IP:CONNECTION_PORT"
 echo ""
 echo "4. Add this server to Claude Desktop config:"
 echo "   File location:"
@@ -99,7 +100,7 @@ echo '   {
          "env": {
            "TMDB_API_KEY": "your_api_key",
            "ANDROID_TV_HOST": "your_tv_ip",
-           "ANDROID_TV_PORT": "5555"
+           "ANDROID_TV_PORT": "your_connection_port"
          }
        }
      }

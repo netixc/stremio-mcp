@@ -6,11 +6,10 @@ Stremio MCP Server - Control Stremio on Android TV via ADB
 import asyncio
 import logging
 import os
+import re
 from typing import Any, Optional
 
 import requests
-from adb_shell.adb_device import AdbDeviceTcp
-from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
@@ -24,102 +23,125 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 ANDROID_TV_HOST = os.getenv("ANDROID_TV_HOST", "")
 ANDROID_TV_PORT = int(os.getenv("ANDROID_TV_PORT", "5555"))
 STREMIO_AUTH_KEY = os.getenv("STREMIO_AUTH_KEY", "")
-ADB_KEY_PATH = os.path.expanduser("~/.android/adbkey")
+ADB_PATH = os.getenv("ADB_PATH", "adb")
+
 
 class StremioController:
-    """Controller for Stremio on Android TV via ADB"""
+    """Controller for Stremio on Android TV via the native ADB client."""
 
     def __init__(self, host: str, port: int = 5555):
         self.host = host
         self.port = port
-        self.device: Optional[AdbDeviceTcp] = None
-        self.signer: Optional[PythonRSASigner] = None
+        self.target = f"{host}:{port}"
+        self.device: Optional[str] = None
+
+    async def _run_adb(self, *args: str) -> tuple[int, str, str]:
+        """Run a terminating ADB command without blocking the MCP event loop."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                ADB_PATH,
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as e:
+            return -1, "", str(e)
+
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            return -1, "", "ADB command timed out"
+
+        return (
+            process.returncode or 0,
+            stdout.decode(errors="replace").strip(),
+            stderr.decode(errors="replace").strip(),
+        )
 
     async def connect(self) -> bool:
-        """Connect to Android TV via ADB"""
-        try:
-            # Load ADB keys for authentication
-            signer = None
-            if os.path.exists(ADB_KEY_PATH):
-                try:
-                    with open(ADB_KEY_PATH) as f:
-                        priv_key = f.read()
-                    with open(ADB_KEY_PATH + '.pub') as f:
-                        pub_key = f.read()
-                    signer = PythonRSASigner(pub_key, priv_key)
-                    logger.debug("Loaded ADB keys for authentication")
-                except Exception as e:
-                    logger.warning(f"Could not load ADB keys: {e}")
-
-            # Connect to device
-            self.device = AdbDeviceTcp(self.host, self.port, default_transport_timeout_s=9.0)
-
-            # Run connection in thread to avoid blocking
-            loop = asyncio.get_event_loop()
-            auth_args = [signer] if signer else []
-            await loop.run_in_executor(None, lambda: self.device.connect(auth_timeout_s=10, auth_callback=None, rsa_keys=auth_args))
-
-            logger.info(f"Connected to Android TV at {self.host}:{self.port}")
+        """Connect the native ADB client to the configured Android TV."""
+        returncode, stdout, stderr = await self._run_adb("connect", self.target)
+        output = f"{stdout}\n{stderr}".lower()
+        if returncode == 0 and (
+            "connected to" in output or "already connected to" in output
+        ):
+            self.device = self.target
+            logger.info(f"Connected to Android TV at {self.target}")
             return True
-        except Exception as e:
-            logger.error(f"Failed to connect to Android TV: {e}")
-            return False
+
+        logger.error(f"Failed to connect to Android TV: {stderr or stdout}")
+        return False
 
     async def disconnect(self):
-        """Disconnect from Android TV"""
-        if self.device:
-            try:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self.device.close)
-                logger.info("Disconnected from Android TV")
-            except Exception as e:
-                logger.error(f"Error disconnecting: {e}")
+        """Disconnect the native ADB client from the Android TV."""
+        if not self.device:
+            return
+
+        target = self.device
+        self.device = None
+        returncode, stdout, stderr = await self._run_adb("disconnect", target)
+        if returncode == 0:
+            logger.info("Disconnected from Android TV")
+        else:
+            logger.error(f"Error disconnecting: {stderr or stdout}")
+
+    async def _ensure_connected(self) -> bool:
+        return bool(self.device) or await self.connect()
 
     async def send_intent(self, uri: str) -> bool:
-        """Send an intent to open a Stremio deep link"""
-        if not self.device:
-            await self.connect()
-
-        try:
-            cmd = f'am start -a android.intent.action.VIEW -d "{uri}"'
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self.device.shell, cmd)
-            logger.info(f"Sent intent: {uri}")
-            logger.debug(f"Result: {result}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send intent: {e}")
+        """Send an intent to open a Stremio deep link."""
+        if not await self._ensure_connected():
             return False
+
+        returncode, stdout, stderr = await self._run_adb(
+            "-s",
+            self.device,
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.VIEW",
+            "-d",
+            uri,
+        )
+        if returncode != 0:
+            logger.error(f"Failed to send intent: {stderr or stdout}")
+            return False
+
+        logger.info(f"Sent intent: {uri}")
+        logger.debug(f"Result: {stdout}")
+        return True
 
     async def send_key_event(self, keycode: int, delay: float = 0.5) -> bool:
-        """Send a key event to Android TV"""
-        if not self.device:
-            await self.connect()
-
-        try:
-            # Wait a bit before sending key
-            await asyncio.sleep(delay)
-            cmd = f'input keyevent {keycode}'
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self.device.shell, cmd)
-            logger.debug(f"Sent keycode {keycode}: {result}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send key event: {e}")
+        """Send a key event to Android TV."""
+        if not await self._ensure_connected():
             return False
 
-    async def send_shell_command(self, command: str) -> str:
-        """Send a shell command to Android TV and return output"""
-        if not self.device:
-            await self.connect()
+        await asyncio.sleep(delay)
+        returncode, stdout, stderr = await self._run_adb(
+            "-s", self.device, "shell", "input", "keyevent", str(keycode)
+        )
+        if returncode != 0:
+            logger.error(f"Failed to send key event: {stderr or stdout}")
+            return False
 
-        try:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self.device.shell, command)
-            return result.strip() if result else ""
-        except Exception as e:
-            logger.error(f"Failed to send shell command: {e}")
+        logger.debug(f"Sent keycode {keycode}: {stdout}")
+        return True
+
+    async def send_shell_command(self, command: str) -> str:
+        """Send a trusted shell command to Android TV and return output."""
+        if not await self._ensure_connected():
             return ""
+
+        returncode, stdout, stderr = await self._run_adb(
+            "-s", self.device, "shell", command
+        )
+        if returncode != 0:
+            logger.error(f"Failed to send shell command: {stderr or stdout}")
+            return ""
+        return stdout.strip()
 
     # Volume Controls
     async def volume_up(self) -> bool:
@@ -220,11 +242,17 @@ class StremioController:
         return await self.send_key_event(26, delay=0)  # KEYCODE_POWER
 
     async def get_tv_state(self) -> str:
-        """Check if TV screen is on or off"""
-        result = await self.send_shell_command("dumpsys power | grep 'Display Power: state='")
-        if "state=ON" in result:
+        """Check if TV screen is on or off."""
+        result = (await self.send_shell_command("dumpsys power")).lower()
+        if "display power: state=on" in result or any(
+            state in result
+            for state in ("mwakefulness=awake", "mwakefulness=dreaming")
+        ):
             return "on"
-        elif "state=OFF" in result:
+        if "display power: state=off" in result or any(
+            state in result
+            for state in ("mwakefulness=asleep", "mwakefulness=dozing")
+        ):
             return "off"
         return "unknown"
 
@@ -244,7 +272,27 @@ class StremioController:
         if not result:
             return status
 
+        # dumpsys includes every media session. Restrict parsing to Stremio's
+        # block so inactive Bluetooth/Netflix positions cannot overwrite it.
+        session_header = re.search(
+            r"(?m)^\s*PlayerMediaSession com\.stremio\.one/[^\n]*$", result
+        )
+        if session_header:
+            session_result = result[session_header.start():]
+            next_header = re.search(
+                r"(?m)^ {4}\S.*\(userId=\d+\)\s*$",
+                session_result[session_result.find("\n") + 1:],
+            )
+            if next_header:
+                first_line_end = session_result.find("\n") + 1
+                session_result = session_result[
+                    :first_line_end + next_header.start()
+                ]
+            result = session_result
+
         # Parse the output
+        playback_updated = None
+        playback_speed = 0.0
         lines = result.split('\n')
         for i, line in enumerate(lines):
             # Check if Stremio is active
@@ -253,11 +301,12 @@ class StremioController:
 
             # Get playback state
             if "state=PlaybackState" in line:
-                # state=3 means playing, state=2 means paused
-                if "state=3" in line:
+                # Android emits either numeric states or named states such as
+                # PLAYING(3), depending on the OS/media-session version.
+                if "state=3" in line or "state=PLAYING(3)" in line:
                     status["playing"] = True
                     status["state"] = "playing"
-                elif "state=2" in line:
+                elif "state=2" in line or "state=PAUSED(2)" in line:
                     status["state"] = "paused"
 
                 # Extract position (in milliseconds)
@@ -268,13 +317,12 @@ class StremioController:
                     except:
                         pass
 
-                # Extract buffered position as duration estimate
-                if "buffered position=" in line:
-                    try:
-                        buf_str = line.split("buffered position=")[1].split(",")[0]
-                        status["duration"] = int(buf_str)
-                    except:
-                        pass
+                updated_match = re.search(r"\bupdated=(\d+)", line)
+                speed_match = re.search(r"\bspeed=(-?[\d.]+)", line)
+                if updated_match:
+                    playback_updated = int(updated_match.group(1))
+                if speed_match:
+                    playback_speed = float(speed_match.group(1))
 
             # Get metadata (title)
             if "metadata:" in line and "description=" in line:
@@ -294,6 +342,34 @@ class StremioController:
                             status["title"] = desc.strip()
                         except:
                             pass
+
+        # PlaybackState positions are snapshots. Android clients extrapolate a
+        # playing position from the monotonic update time and playback speed.
+        if (
+            status["playing"]
+            and status["position"] is not None
+            and playback_updated is not None
+            and playback_speed > 0
+        ):
+            uptime = await self.send_shell_command("cat /proc/uptime")
+            try:
+                uptime_ms = float(uptime.split()[0]) * 1000
+                elapsed_ms = max(0, uptime_ms - playback_updated)
+                status["position"] += int(elapsed_ms * playback_speed)
+            except (ValueError, IndexError):
+                pass
+
+        # Stremio omits METADATA_KEY_DURATION, but Android's most recent media
+        # extractor entry exposes the active track duration in microseconds.
+        extractor = await self.send_shell_command("dumpsys media.extractor")
+        for match in re.finditer(r"\bdura:\s*\(int64_t\)\s*(\d+)", extractor):
+            duration_us = int(match.group(1))
+            if duration_us >= 60_000_000:
+                status["duration"] = duration_us // 1000
+                break
+
+        if status["duration"] is not None and status["position"] is not None:
+            status["position"] = min(status["position"], status["duration"])
 
         return status
 
