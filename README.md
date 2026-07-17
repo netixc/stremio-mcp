@@ -189,6 +189,18 @@ Replace `/absolute/path/to/stremio-mcp` with the actual path to this project.
 
 **Note**: Using `uv run` ensures dependencies are automatically managed and the correct Python environment is used.
 
+## Validation
+
+Run the locked, credential-free maintenance checks with:
+
+```bash
+uv sync --locked
+uv run --locked python -m unittest discover -s tests -v
+uv run --locked python -m compileall -q src tests
+```
+
+The unit tests use mocks for dispatch boundaries and do not contact TMDB, Stremio, or an Android device.
+
 ## Usage
 
 Once configured, you can use natural language commands in Claude:
