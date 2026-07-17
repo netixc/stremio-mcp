@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -85,6 +85,286 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_tool_is_rejected(self):
         response = await stremio_mcp.call_tool("not-a-tool", {})
         self.assertEqual(response[0].text, "Unknown tool: not-a-tool")
+
+
+class LibraryClientTests(unittest.TestCase):
+    def setUp(self):
+        self.client = stremio_mcp.StremioAPIClient("test-auth")
+
+    def test_get_library_can_exclude_removed_items(self):
+        self.client._make_request = MagicMock(
+            return_value=[
+                {"_id": "tt0000001", "name": "Active", "removed": False},
+                {"_id": "tt0000002", "name": "Removed", "removed": True},
+            ]
+        )
+
+        items = self.client.get_library(active_only=True)
+
+        self.assertEqual([item["name"] for item in items], ["Active"])
+
+    def test_get_library_item_rejects_malformed_id_without_request(self):
+        self.client._make_request = MagicMock()
+
+        self.assertIsNone(self.client.get_library_item("not-an-imdb-id"))
+        self.client._make_request.assert_not_called()
+
+    def test_build_library_item_uses_stremio_id_and_preserves_watch_state(self):
+        existing_state = {"video_id": "tt0000001:1:2", "timeOffset": 1234}
+        existing = {
+            "_id": "tt0000001",
+            "_ctime": "2025-01-01T00:00:00Z",
+            "state": existing_state,
+            "removed": True,
+        }
+        meta = {
+            "id": "tt0000001",
+            "name": "Example",
+            "type": "series",
+            "poster": "https://example.invalid/poster.jpg",
+        }
+        self.client._utc_now = MagicMock(return_value="2026-01-01T00:00:00Z")
+
+        item = self.client.build_library_item(meta, existing)
+
+        self.assertEqual(item["_id"], "tt0000001")
+        self.assertNotIn("id", item)
+        self.assertFalse(item["removed"])
+        self.assertIs(item["state"], existing_state)
+        self.assertEqual(item["_ctime"], "2025-01-01T00:00:00Z")
+        self.assertEqual(item["_mtime"], "2026-01-01T00:00:00Z")
+
+    def test_add_to_library_fetches_metadata_and_verifies_write(self):
+        meta = {"id": "tt1375666", "name": "Inception", "type": "movie"}
+        state = {
+            "lastWatched": None,
+            "timeWatched": 0,
+            "timeOffset": 0,
+            "overallTimeWatched": 0,
+            "timesWatched": 0,
+            "flaggedWatched": 0,
+            "duration": 0,
+            "video_id": None,
+            "watched": None,
+            "noNotif": False,
+        }
+        persisted = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": False,
+            "state": state,
+        }
+        self.client.get_library_item = MagicMock(side_effect=[None, persisted])
+        self.client.fetch_cinemeta_meta = MagicMock(return_value=meta)
+        self.client._make_request = MagicMock(return_value={})
+
+        success, status, item = self.client.add_to_library("movie", "tt1375666")
+
+        self.assertTrue(success)
+        self.assertEqual(status, "added")
+        self.assertEqual(item["_id"], "tt1375666")
+        self.client.fetch_cinemeta_meta.assert_called_once_with("movie", "tt1375666")
+        self.client._make_request.assert_called_once()
+        request_method, request_params = self.client._make_request.call_args.args
+        self.assertEqual(request_method, "datastorePut")
+        self.assertEqual(request_params["collection"], "libraryItem")
+        self.assertEqual(request_params["changes"][0]["_id"], "tt1375666")
+
+    def test_add_to_library_reports_failed_write_verification(self):
+        meta = {"id": "tt1375666", "name": "Inception", "type": "movie"}
+        self.client.get_library_item = MagicMock(side_effect=[None, None])
+        self.client.fetch_cinemeta_meta = MagicMock(return_value=meta)
+        self.client._make_request = MagicMock(return_value={})
+
+        success, status, item = self.client.add_to_library("movie", "tt1375666")
+
+        self.assertFalse(success)
+        self.assertEqual(status, "write verification failed")
+        self.assertEqual(item["_id"], "tt1375666")
+
+    def test_add_to_library_does_not_rewrite_active_item(self):
+        existing = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": False,
+        }
+        self.client.get_library_item = MagicMock(return_value=existing)
+        self.client.fetch_cinemeta_meta = MagicMock()
+        self.client._make_request = MagicMock()
+
+        success, status, item = self.client.add_to_library("movie", "tt1375666")
+
+        self.assertTrue(success)
+        self.assertEqual(status, "already in library")
+        self.assertIs(item, existing)
+        self.client.fetch_cinemeta_meta.assert_not_called()
+        self.client._make_request.assert_not_called()
+
+    def test_add_to_library_rejects_mismatched_cinemeta_metadata(self):
+        self.client.get_library_item = MagicMock(return_value=None)
+        self.client.fetch_cinemeta_meta = MagicMock(
+            return_value={"id": "tt0000002", "name": "Wrong", "type": "movie"}
+        )
+        self.client._make_request = MagicMock()
+
+        success, status, item = self.client.add_to_library("movie", "tt0000001")
+
+        self.assertFalse(success)
+        self.assertEqual(status, "metadata not found")
+        self.assertIsNone(item)
+        self.client._make_request.assert_not_called()
+
+    def test_add_to_library_readds_removed_item_with_preserved_state(self):
+        state = {"video_id": "tt1375666", "timeOffset": 1234}
+        existing = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": True,
+            "state": state,
+        }
+        persisted = {**existing, "removed": False}
+        self.client.get_library_item = MagicMock(side_effect=[existing, persisted])
+        self.client.fetch_cinemeta_meta = MagicMock(
+            return_value={"id": "tt1375666", "name": "Inception", "type": "movie"}
+        )
+        self.client._make_request = MagicMock(return_value={})
+
+        success, status, item = self.client.add_to_library("movie", "tt1375666")
+
+        self.assertTrue(success)
+        self.assertEqual(status, "re-added")
+        self.assertIs(item["state"], state)
+
+    def test_remove_from_library_soft_deletes_and_preserves_state(self):
+        state = {"video_id": "tt1375666", "timeOffset": 1234}
+        existing = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": False,
+            "state": state,
+        }
+        persisted = {**existing, "removed": True}
+        self.client.get_library_item = MagicMock(side_effect=[existing, persisted])
+        self.client._make_request = MagicMock(return_value={})
+
+        success, status, item = self.client.remove_from_library(
+            "movie", "tt1375666"
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(status, "removed")
+        self.assertTrue(item["removed"])
+        self.assertIs(item["state"], state)
+        written = self.client._make_request.call_args.args[1]["changes"][0]
+        self.assertTrue(written["removed"])
+        self.assertIs(written["state"], state)
+
+    def test_remove_from_library_is_idempotent_for_removed_item(self):
+        existing = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": True,
+            "state": {},
+        }
+        self.client.get_library_item = MagicMock(return_value=existing)
+        self.client._make_request = MagicMock()
+
+        success, status, item = self.client.remove_from_library(
+            "movie", "tt1375666"
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(status, "already removed")
+        self.assertIs(item, existing)
+        self.client._make_request.assert_not_called()
+
+    def test_remove_from_library_rejects_type_mismatch_without_write(self):
+        existing = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": False,
+        }
+        self.client.get_library_item = MagicMock(return_value=existing)
+        self.client._make_request = MagicMock()
+
+        success, status, item = self.client.remove_from_library(
+            "series", "tt1375666"
+        )
+
+        self.assertFalse(success)
+        self.assertEqual(status, "type mismatch")
+        self.assertIs(item, existing)
+        self.client._make_request.assert_not_called()
+
+
+class LibraryMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.original_client = stremio_mcp.stremio_client
+        stremio_mcp.stremio_client = MagicMock()
+
+    async def asyncTearDown(self):
+        stremio_mcp.stremio_client = self.original_client
+
+    async def test_library_schema_exposes_safe_mutation_actions(self):
+        tools = await stremio_mcp.list_tools()
+        library_tool = next(tool for tool in tools if tool.name == "library")
+
+        self.assertEqual(
+            library_tool.inputSchema["properties"]["action"]["enum"],
+            ["list", "continue", "search", "check", "add", "remove"],
+        )
+        self.assertIn("imdb_id", library_tool.inputSchema["properties"])
+        self.assertIn("active_only", library_tool.inputSchema["properties"])
+
+    async def test_add_requires_direct_imdb_id_and_type(self):
+        response = await stremio_mcp.call_tool(
+            "library", {"action": "add", "query": "Inception"}
+        )
+
+        self.assertIn("imdb_id", response[0].text)
+        stremio_mcp.stremio_client.add_to_library.assert_not_called()
+
+    async def test_check_reports_soft_deleted_item_without_mutating(self):
+        stremio_mcp.stremio_client.get_library_item.return_value = {
+            "_id": "tt1375666",
+            "name": "Inception",
+            "type": "movie",
+            "removed": True,
+        }
+
+        response = await stremio_mcp.call_tool(
+            "library", {"action": "check", "imdb_id": "tt1375666"}
+        )
+
+        self.assertIn("removed in library", response[0].text)
+        stremio_mcp.stremio_client.get_library_item.assert_called_once_with(
+            "tt1375666"
+        )
+        stremio_mcp.stremio_client.add_to_library.assert_not_called()
+        stremio_mcp.stremio_client.remove_from_library.assert_not_called()
+
+    async def test_add_dispatches_direct_target(self):
+        stremio_mcp.stremio_client.add_to_library.return_value = (
+            True,
+            "added",
+            {"_id": "tt1375666", "name": "Inception", "type": "movie"},
+        )
+
+        response = await stremio_mcp.call_tool(
+            "library",
+            {"action": "add", "type": "movie", "imdb_id": "tt1375666"},
+        )
+
+        self.assertIn("Inception: added", response[0].text)
+        stremio_mcp.stremio_client.add_to_library.assert_called_once_with(
+            "movie", "tt1375666"
+        )
 
 
 class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
