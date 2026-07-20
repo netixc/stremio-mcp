@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Network bounds are configurable through `STREMIO_MCP_*` environment variables; an unparsable or out-of-range value is reported by variable name, without its value, and replaced with the default.
 - `library list`, `library check`, `library search`, `library continue`, and library-sourced `play` now report an unavailable library separately from an empty one.
 - `TMDBClient` and `StremioAPIClient` methods are now coroutines and take a shared `AsyncHTTPClient`. This is a breaking change for anyone importing those classes directly; it is required to move network I/O off the event loop.
-
+- `search` reports a TMDB outage as an error instead of as "No results found". An automatic search whose movie or TV half fails returns the other half's results with an explicit `(partial results — …)` note.
 - An unfollowed redirect is reported as its own `redirect` category instead of being decoded and misreported as malformed JSON, and an `httpx` stream failure is now categorized as a connection failure rather than escaping the typed error contract.
 - A Stremio API-level error now also reports the server-generated numeric error code, so an expired or revoked auth key is diagnosable without echoing any part of the request.
 - Write verification compares only the state keys this module actually writes, so a server-side addition to an untouched field no longer reports a successful mutation as failed. Any intended key that is missing or different is still a failure.

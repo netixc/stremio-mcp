@@ -180,6 +180,8 @@ Library mutations require an explicit IMDb ID and content type. Search first whe
 
 Library reads report `found`, `not found`, and `unavailable` as distinct outcomes. Mutations fail closed: `add` and `remove` abort without writing whenever the preceding read failed, returned an item whose `_id` is not exactly the requested ID, returned duplicate or unrequested rows, or returned an item of a different content type. This means a transient Stremio failure can never be mistaken for "this item does not exist" and overwrite existing watch state.
 
+`search` reports a TMDB outage as an error rather than as "no results". When an automatic search reaches only one of the movie and TV halves, it returns the half that succeeded and appends a `(partial results — …)` note.
+
 ## Example prompts
 
 ```text
