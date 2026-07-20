@@ -711,13 +711,18 @@ class AsyncHTTPClient:
             raise HTTPClientError(
                 "timeout", host=host, detail=type(e).__name__
             ) from None
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, httpx.StreamError) as e:
             raise HTTPClientError(
                 "connection", host=host, detail=type(e).__name__
             ) from None
 
         if status_code >= 400:
             raise HTTPClientError("http_status", host=host, status_code=status_code)
+
+        if 300 <= status_code < 400:
+            # Redirects are not followed, so the body is not the resource that
+            # was asked for; reporting it as malformed JSON would be misleading.
+            raise HTTPClientError("redirect", host=host, status_code=status_code)
 
         try:
             return json.loads(body)
@@ -969,9 +974,16 @@ class StremioAPIClient:
             return ApiResult(False, detail="category=unexpected_response_shape")
 
         if data.get("error"):
-            # The API error object can echo request fields, so only its type is
-            # reported and even that is redacted.
-            detail = redact_secrets(f"category=api_error kind={type(data['error']).__name__}")
+            # The API error object can echo request fields, so only its type and
+            # the server-generated numeric code are reported, and even those are
+            # redacted.
+            error = data["error"]
+            parts = [f"category=api_error kind={type(error).__name__}"]
+            if isinstance(error, dict):
+                code = error.get("code")
+                if isinstance(code, int) and not isinstance(code, bool):
+                    parts.append(f"code={code}")
+            detail = redact_secrets(" ".join(parts))
             logger.error("Stremio API error (%s): %s", method, detail)
             return ApiResult(False, detail=detail)
 
@@ -1040,11 +1052,6 @@ class StremioAPIClient:
 
         return LibraryRead(ReadStatus.FOUND, item=matching[0])
 
-    async def get_library_item(self, imdb_id: str) -> Optional[dict]:
-        """Return the item only when the read authoritatively found it."""
-        read = await self.read_library_item(imdb_id)
-        return read.item if read.is_found else None
-
     async def read_library(self, active_only: bool = False) -> LibraryListRead:
         """Read the whole library, distinguishing empty from unavailable."""
         response = await self._make_request(
@@ -1062,10 +1069,6 @@ class StremioAPIClient:
 
         logger.info("Retrieved %d library items", len(rows))
         return LibraryListRead(True, items=rows)
-
-    async def get_library(self, active_only: bool = False) -> list:
-        """Return library rows, or an empty list when the read failed."""
-        return (await self.read_library(active_only=active_only)).items
 
     async def read_continue_watching(self) -> LibraryListRead:
         """Active items the user is currently watching (not finished)."""
@@ -1095,10 +1098,6 @@ class StremioAPIClient:
         )
         return LibraryListRead(True, items=continue_watching)
 
-    async def get_continue_watching(self) -> list:
-        """Return in-progress items, or an empty list when the read failed."""
-        return (await self.read_continue_watching()).items
-
     async def read_library_search(
         self, query: str, active_only: bool = True
     ) -> LibraryListRead:
@@ -1114,10 +1113,6 @@ class StremioAPIClient:
             if query_lower in str(item.get("name", "")).lower()
         ]
         return LibraryListRead(True, items=results)
-
-    async def search_library(self, query: str, active_only: bool = True) -> list:
-        """Return matching library rows, or an empty list when the read failed."""
-        return (await self.read_library_search(query, active_only=active_only)).items
 
     async def read_cinemeta_meta(self, content_type: str, imdb_id: str) -> MetaRead:
         """Fetch Stremio-compatible metadata for an explicit IMDb ID."""
@@ -1208,9 +1203,22 @@ class StremioAPIClient:
             return False, "write verification type mismatch"
         if bool(persisted.get("removed")) != bool(item.get("removed")):
             return False, "write verification failed"
-        if persisted.get("state") != item.get("state"):
-            # Something changed the item between the write and the read; the
-            # safe answer is to report failure rather than claim the write won.
+        intended_state = item.get("state")
+        persisted_state = persisted.get("state")
+        if isinstance(intended_state, dict):
+            # Only the keys this module actually wrote are compared, so a
+            # server-side addition or normalization of an untouched field is not
+            # mistaken for a lost write.
+            if not isinstance(persisted_state, dict):
+                return False, "write verification state conflict"
+            if any(
+                key not in persisted_state or persisted_state[key] != value
+                for key, value in intended_state.items()
+            ):
+                # Something changed the item between the write and the read; the
+                # safe answer is to report failure rather than claim the write won.
+                return False, "write verification state conflict"
+        elif persisted_state != intended_state:
             return False, "write verification state conflict"
         return True, "verified"
 

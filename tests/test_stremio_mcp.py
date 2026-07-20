@@ -371,6 +371,29 @@ class StremioTransportRedactionTests(
                 self.assertNoSecrets(result.detail, f"{name} detail")
                 self.assertNoSecrets(stream.getvalue(), f"{name} logs")
 
+    async def test_api_error_reports_the_numeric_code_without_echoing_the_object(self):
+        http = mock_http_client(
+            json_handler(
+                {
+                    "error": {
+                        "code": 1,
+                        "message": f"session {SENTINEL_AUTH_KEY} expired",
+                    }
+                }
+            )
+        )
+        client = stremio_mcp.StremioAPIClient(SENTINEL_AUTH_KEY, http)
+        with capture_all_logs() as stream:
+            result = await client._make_request("datastoreGet", {"all": True})
+        await http.aclose()
+
+        self.assertFalse(result.ok)
+        self.assertIn("category=api_error", result.detail)
+        self.assertIn("code=1", result.detail)
+        self.assertNotIn("expired", result.detail)
+        self.assertNoSecrets(result.detail, "api error detail")
+        self.assertNoSecrets(stream.getvalue(), "api error logs")
+
     async def test_auth_key_is_never_placed_in_the_url(self):
         seen = []
 
@@ -485,6 +508,32 @@ class AsyncHTTPClientTests(unittest.IsolatedAsyncioTestCase):
         await http.aclose()
 
         self.assertEqual(payload, {"ok": True})
+
+    async def test_unfollowed_redirects_are_typed_as_redirects(self):
+        async def handler(request):
+            return httpx.Response(
+                302, headers={"Location": "https://example.invalid/"}, content=b""
+            )
+
+        http = mock_http_client(handler)
+        with self.assertRaises(stremio_mcp.HTTPClientError) as caught:
+            await http.request_json("GET", "https://api.themoviedb.org/3/x")
+        await http.aclose()
+
+        self.assertEqual(caught.exception.category, "redirect")
+        self.assertEqual(caught.exception.status_code, 302)
+
+    async def test_stream_errors_are_typed_as_connection_failures(self):
+        async def handler(request):
+            raise httpx.StreamError("stream broke")
+
+        http = mock_http_client(handler)
+        with self.assertRaises(stremio_mcp.HTTPClientError) as caught:
+            await http.request_json("GET", "https://api.themoviedb.org/3/x")
+        await http.aclose()
+
+        self.assertEqual(caught.exception.category, "connection")
+        self.assertEqual(caught.exception.host, "api.themoviedb.org")
 
     async def test_aclose_is_idempotent_and_blocks_later_use(self):
         http = mock_http_client(json_handler({"ok": True}))
@@ -890,10 +939,15 @@ class LibraryReadOutcomeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(read.is_error)
         self.client._make_request.assert_not_awaited()
 
-    async def test_get_library_item_compat_wrapper_hides_errors_as_none(self):
-        self.client._make_request = AsyncMock(return_value=api_error())
-
-        self.assertIsNone(await self.client.get_library_item("tt1375666"))
+    async def test_error_erasing_compat_wrappers_are_gone(self):
+        for name in (
+            "get_library_item",
+            "get_library",
+            "get_continue_watching",
+            "search_library",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(self.client, name))
 
     async def test_library_list_read_separates_empty_from_unavailable(self):
         self.client._make_request = AsyncMock(return_value=api_ok([]))
@@ -906,7 +960,7 @@ class LibraryReadOutcomeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(unavailable.ok)
         self.assertEqual(unavailable.items, [])
 
-    async def test_get_library_can_exclude_removed_items(self):
+    async def test_read_library_can_exclude_removed_items(self):
         self.client._make_request = AsyncMock(
             return_value=api_ok(
                 [
@@ -916,9 +970,10 @@ class LibraryReadOutcomeTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        items = await self.client.get_library(active_only=True)
+        read = await self.client.read_library(active_only=True)
 
-        self.assertEqual([item["name"] for item in items], ["Active"])
+        self.assertTrue(read.ok)
+        self.assertEqual([item["name"] for item in read.items], ["Active"])
 
 
 class LibraryMutationFailClosedTests(unittest.IsolatedAsyncioTestCase):
@@ -1092,6 +1147,40 @@ class LibraryMutationFailClosedTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(success)
         self.assertIn("state conflict", status)
+
+    async def test_server_added_state_fields_do_not_fail_a_good_write(self):
+        item = {
+            "_id": "tt1375666",
+            "type": "movie",
+            "removed": False,
+            "state": {"timeOffset": 0, "flaggedWatched": 0},
+        }
+        persisted = dict(item, state={**item["state"], "serverOnlyField": "x"})
+        self.client._make_request = AsyncMock(
+            side_effect=[api_ok({}), api_ok([persisted])]
+        )
+
+        written, detail = await self.client.put_library_item(item)
+
+        self.assertTrue(written)
+        self.assertEqual(detail, "verified")
+
+    async def test_a_dropped_intended_state_key_still_fails_verification(self):
+        item = {
+            "_id": "tt1375666",
+            "type": "movie",
+            "removed": False,
+            "state": {"timeOffset": 0, "flaggedWatched": 0},
+        }
+        persisted = dict(item, state={"timeOffset": 0})
+        self.client._make_request = AsyncMock(
+            side_effect=[api_ok({}), api_ok([persisted])]
+        )
+
+        written, detail = await self.client.put_library_item(item)
+
+        self.assertFalse(written)
+        self.assertIn("state conflict", detail)
 
     async def test_verification_returning_a_different_item_is_rejected(self):
         item = {"_id": "tt1375666", "type": "movie", "removed": False, "state": {}}
