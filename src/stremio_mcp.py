@@ -231,13 +231,13 @@ class AdbFailure:
         """Return actionable guidance without exposing endpoint or command data."""
         guidance = {
             AdbFailureCategory.UNREACHABLE: (
-                "network reachability is ambiguous; verify the TV is on the same "
-                "LAN and that macOS Local Network access is granted to adb"
+                "the network reported the TV as unreachable; verify the TV is on "
+                "the same LAN and that macOS Local Network access is granted to adb"
             ),
             AdbFailureCategory.AMBIGUOUS_NETWORK: (
-                "network connection failed; verify the TV is online and use its "
-                "current connection port, and on macOS check that Local Network "
-                "access is granted to adb"
+                "network reachability is ambiguous; verify the TV is online and "
+                "use its current connection port, and on macOS check that Local "
+                "Network access is granted to adb"
             ),
             AdbFailureCategory.UNAUTHORIZED: (
                 "the TV has not authorized this computer; accept the debugging "
