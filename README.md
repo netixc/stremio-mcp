@@ -282,6 +282,7 @@ See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTI
 
 - Treat `STREMIO_AUTH_KEY` like a password; it permits library reads and writes.
 - Network failures are logged and returned as a category, host, and status code only. Configured credentials and secret-bearing query strings are stripped from every log record and every error the server returns, including tracebacks and third-party HTTP request logs.
+- ADB failures are logged and returned as a bounded category with guidance only, such as unreachable, unauthorized, offline, or timeout; device endpoints, raw ADB output, and command payloads are never logged or returned.
 - Treat ADB authorization as device-control access and protect `~/.android/adbkey`.
 - Never post `.env`, MCP client configuration, auth keys, device IPs, or ADB keys in issues or logs.
 - Review account and device mutations before approving them in your MCP client.
