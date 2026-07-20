@@ -145,11 +145,26 @@ Restart the MCP client after changing configuration. You can instead place the v
 | --- | --- | --- | --- |
 | `ANDROID_TV_HOST` | Playback and TV tools | Local network detail | Android TV IP address |
 | `ANDROID_TV_PORT` | Playback and TV tools | No | Current ADB connection port; defaults to legacy `5555` |
-| `TMDB_API_KEY` | `search` and title-based `play` with `source="search"` | Yes | API key sent to TMDB |
-| `STREMIO_AUTH_KEY` | `library` and library-based `play` | **Yes** | Account token used for Stremio library reads and writes |
+| `TMDB_API_KEY` | `search` and title-based `play` with `source="search"` | Yes | TMDB credential. A v4 read access token is sent as an `Authorization` header; a legacy v3 key has no header form and is sent as a query parameter |
+| `STREMIO_AUTH_KEY` | `library` and library-based `play` | **Yes** | Account token used for Stremio library reads and writes; sent in the HTTPS request body only |
 | `ADB_PATH` | Optional | No | Native ADB executable; defaults to `adb` on `PATH` |
 
 Features initialize independently. For example, TMDB search works without a TV connection, while direct IMDb playback does not require TMDB. Leave `STREMIO_AUTH_KEY` empty to disable library access.
+
+### Network bounds
+
+Every HTTP request uses one shared async client with explicit timeouts, a bounded response size, and a bounded connection pool, so a slow or unreachable service cannot stall other tool calls or device controls. The defaults are safe; override them only when a slow link makes them too tight. An unparsable or out-of-range value is reported by variable name and replaced with the default.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `STREMIO_MCP_CONNECT_TIMEOUT` | `5` | Seconds to establish a connection |
+| `STREMIO_MCP_READ_TIMEOUT` | `20` | Seconds to wait for response data |
+| `STREMIO_MCP_WRITE_TIMEOUT` | `20` | Seconds to send request data |
+| `STREMIO_MCP_POOL_TIMEOUT` | `5` | Seconds to wait for a pooled connection |
+| `STREMIO_MCP_MAX_RESPONSE_BYTES` | `4194304` | Maximum TMDB/Cinemeta response body |
+| `STREMIO_MCP_LIBRARY_MAX_RESPONSE_BYTES` | `16777216` | Maximum Stremio library response body |
+| `STREMIO_MCP_MAX_CONNECTIONS` | `8` | Maximum simultaneous connections |
+| `STREMIO_MCP_MAX_CONCURRENT_REQUESTS` | `4` | Maximum simultaneous TMDB requests during a fan-out search |
 
 ## Tools and effects
 
@@ -162,6 +177,8 @@ Features initialize independently. For example, TMDB search works without a TV c
 | `playback_status` | Read current Stremio playback diagnostics | Reads Android media-session and extractor diagnostics |
 
 Library mutations require an explicit IMDb ID and content type. Search first when a title is ambiguous; title-based `play` otherwise uses the first matching result. Series playback requires both a season and an episode.
+
+Library reads report `found`, `not found`, and `unavailable` as distinct outcomes. Mutations fail closed: `add` and `remove` abort without writing whenever the preceding read failed, returned an item whose `_id` is not exactly the requested ID, returned duplicate or unrequested rows, or returned an item of a different content type. This means a transient Stremio failure can never be mistaken for "this item does not exist" and overwrite existing watch state.
 
 ## Example prompts
 
@@ -257,6 +274,7 @@ See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTI
 ## Security
 
 - Treat `STREMIO_AUTH_KEY` like a password; it permits library reads and writes.
+- Network failures are logged and returned as a category, host, and status code only. Configured credentials and secret-bearing query strings are stripped from every log record and every error the server returns, including tracebacks and third-party HTTP request logs.
 - Treat ADB authorization as device-control access and protect `~/.android/adbkey`.
 - Never post `.env`, MCP client configuration, auth keys, device IPs, or ADB keys in issues or logs.
 - Review account and device mutations before approving them in your MCP client.
