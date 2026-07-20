@@ -236,7 +236,8 @@ class AdbFailure:
             ),
             AdbFailureCategory.AMBIGUOUS_NETWORK: (
                 "network connection failed; verify the TV is online and use its "
-                "current connection port"
+                "current connection port, and on macOS check that Local Network "
+                "access is granted to adb"
             ),
             AdbFailureCategory.UNAUTHORIZED: (
                 "the TV has not authorized this computer; accept the debugging "
@@ -269,10 +270,6 @@ def classify_adb_failure(returncode: int, stdout: str, stderr: str) -> AdbFailur
         category = AdbFailureCategory.UNAUTHORIZED
     elif re.search(r"\boffline\b", output):
         category = AdbFailureCategory.OFFLINE
-    elif "timed out" in output or "timeout" in output:
-        category = AdbFailureCategory.TIMEOUT
-    elif any(marker in output for marker in ("transport", "broken pipe", "closed")):
-        category = AdbFailureCategory.TRANSPORT
     elif (
         "no route to host" in output
         or "network is unreachable" in output
@@ -290,7 +287,14 @@ def classify_adb_failure(returncode: int, stdout: str, stderr: str) -> AdbFailur
             "connection reset",
         )
     ):
+        # Connect-scoped failures, including "Operation timed out", are equally
+        # consistent with an offline TV and with silently dropped packets from a
+        # macOS Local Network denial.
         category = AdbFailureCategory.AMBIGUOUS_NETWORK
+    elif "timed out" in output or "timeout" in output:
+        category = AdbFailureCategory.TIMEOUT
+    elif any(marker in output for marker in ("transport", "broken pipe", "closed")):
+        category = AdbFailureCategory.TRANSPORT
     elif returncode < 0:
         category = AdbFailureCategory.TRANSPORT
     else:
@@ -307,7 +311,6 @@ class StremioController:
         self.target = f"{host}:{port}"
         self.device: Optional[str] = None
         self.last_failure: Optional[AdbFailure] = None
-        self._last_shell_succeeded: Optional[bool] = None
         self._connect_lock = asyncio.Lock()
         self._next_connect_attempt = 0.0
 
@@ -430,21 +433,24 @@ class StremioController:
         logger.debug("Sent Android key event")
         return True
 
-    async def send_shell_command(self, command: str) -> str:
-        """Send a trusted shell command to Android TV and return output."""
-        self._last_shell_succeeded = False
+    async def _run_shell(self, command: str) -> tuple[bool, str]:
+        """Run a trusted shell command and report success for this call only."""
         if not await self._ensure_connected():
-            return ""
+            return False, ""
 
         returncode, stdout, stderr = await self._run_adb(
             "-s", self.device, "shell", command
         )
         if returncode != 0:
             self._operation_failed("shell command", returncode, stdout, stderr)
-            return ""
+            return False, ""
         self.last_failure = None
-        self._last_shell_succeeded = True
-        return stdout.strip()
+        return True, stdout.strip()
+
+    async def send_shell_command(self, command: str) -> str:
+        """Send a trusted shell command to Android TV and return output."""
+        _, stdout = await self._run_shell(command)
+        return stdout
 
     # Volume Controls
     async def volume_up(self) -> bool:
@@ -466,9 +472,8 @@ class StremioController:
             return False
 
         cmd = f"media volume --stream 3 --set {level}"
-        self._last_shell_succeeded = None
-        await self.send_shell_command(cmd)
-        return self._last_shell_succeeded is True
+        succeeded, _ = await self._run_shell(cmd)
+        return succeeded
 
     # Playback Controls
     async def play_pause(self) -> bool:

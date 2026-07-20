@@ -1568,6 +1568,10 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 stremio_mcp.AdbFailureCategory.AMBIGUOUS_NETWORK,
+                "failed to connect to '10.0.0.8:37139': Operation timed out",
+            ),
+            (
+                stremio_mcp.AdbFailureCategory.AMBIGUOUS_NETWORK,
                 "failed to connect: Connection refused",
             ),
         )
@@ -1644,9 +1648,31 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_set_volume_does_not_treat_empty_mocked_failure_as_success(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)
-        controller.send_shell_command = AsyncMock(return_value="")
+        controller._run_shell = AsyncMock(return_value=(False, ""))
 
         self.assertFalse(await controller.set_volume(8))
+
+    async def test_set_volume_failure_survives_concurrent_successful_shell(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        started = asyncio.Event()
+
+        async def fake_run_adb(*args):
+            if args[-1].startswith("media volume"):
+                started.set()
+                await asyncio.sleep(0)
+                return 1, "", "error: device offline"
+            await started.wait()
+            return 0, "state=ON\n", ""
+
+        controller._run_adb = AsyncMock(side_effect=fake_run_adb)
+
+        volume_result, shell_result = await asyncio.gather(
+            controller.set_volume(8), controller.send_shell_command("dumpsys power")
+        )
+
+        self.assertFalse(volume_result)
+        self.assertEqual(shell_result, "state=ON")
 
     async def test_send_shell_command_targets_connected_device(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)
