@@ -222,8 +222,13 @@ adb devices -l
 - Use the current connection port, not the pairing port.
 - Accept the authorization prompt on the TV.
 - If pairing is stale, forget the computer on the TV and pair again.
-- Restart ADB with `adb kill-server && adb start-server`.
-- On macOS, allow the terminal or MCP host under **Privacy & Security → Local Network**.
+- On macOS, grant **Local Network** permission under **Privacy & Security → Local
+  Network** to the `adb` binary itself. A reliable pattern is to start the ADB
+  server once from a permitted GUI terminal, then let the MCP server and other
+  tools act as localhost clients of that existing server.
+- Do not run `adb kill-server` or `adb start-server` from automated tooling: that
+  can discard a permitted server and recreate it under a process without the
+  required macOS permission.
 
 ### Stremio opens but content does not play
 
@@ -277,6 +282,7 @@ See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTI
 
 - Treat `STREMIO_AUTH_KEY` like a password; it permits library reads and writes.
 - Network failures are logged and returned as a category, host, and status code only. Configured credentials and secret-bearing query strings are stripped from every log record and every error the server returns, including tracebacks and third-party HTTP request logs.
+- ADB failures are logged and returned as a bounded category with guidance only, such as unreachable, unauthorized, offline, or timeout; device endpoints, raw ADB output, and command payloads are never logged or returned.
 - Treat ADB authorization as device-control access and protect `~/.android/adbkey`.
 - Never post `.env`, MCP client configuration, auth keys, device IPs, or ADB keys in issues or logs.
 - Review account and device mutations before approving them in your MCP client.
