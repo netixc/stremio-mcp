@@ -222,8 +222,13 @@ adb devices -l
 - Use the current connection port, not the pairing port.
 - Accept the authorization prompt on the TV.
 - If pairing is stale, forget the computer on the TV and pair again.
-- Restart ADB with `adb kill-server && adb start-server`.
-- On macOS, allow the terminal or MCP host under **Privacy & Security → Local Network**.
+- On macOS, grant **Local Network** permission under **Privacy & Security → Local
+  Network** to the `adb` binary itself. A reliable pattern is to start the ADB
+  server once from a permitted GUI terminal, then let the MCP server and other
+  tools act as localhost clients of that existing server.
+- Do not run `adb kill-server` or `adb start-server` from automated tooling: that
+  can discard a permitted server and recreate it under a process without the
+  required macOS permission.
 
 ### Stremio opens but content does not play
 

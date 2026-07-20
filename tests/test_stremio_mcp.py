@@ -1548,6 +1548,106 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(controller.device, "test.invalid:37139")
 
+    async def test_connect_classifies_representative_adb_failures(self):
+        cases = (
+            (
+                stremio_mcp.AdbFailureCategory.UNAUTHORIZED,
+                "error: device unauthorized",
+            ),
+            (
+                stremio_mcp.AdbFailureCategory.OFFLINE,
+                "error: device offline",
+            ),
+            (
+                stremio_mcp.AdbFailureCategory.UNREACHABLE,
+                "failed to connect to '10.0.0.8:37139': No route to host",
+            ),
+            (
+                stremio_mcp.AdbFailureCategory.TIMEOUT,
+                "ADB command timed out",
+            ),
+            (
+                stremio_mcp.AdbFailureCategory.AMBIGUOUS_NETWORK,
+                "failed to connect: Connection refused",
+            ),
+        )
+
+        for category, stderr in cases:
+            with self.subTest(category=category):
+                controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+                controller._run_adb = AsyncMock(return_value=(1, "", stderr))
+
+                self.assertFalse(await controller.connect())
+                self.assertEqual(controller.last_failure.category, category)
+                self.assertNotIn("10.0.0.8", controller.last_failure.user_message())
+                self.assertNotIn("37139", controller.last_failure.user_message())
+
+    async def test_connect_failure_logs_category_without_endpoint_or_stderr(self):
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller._run_adb = AsyncMock(
+            return_value=(
+                1,
+                "",
+                "failed to connect to '10.0.0.8:37139': No route to host; "
+                "secret-token-12345678",
+            )
+        )
+
+        with capture_all_logs() as stream:
+            self.assertFalse(await controller.connect())
+
+        output = stream.getvalue()
+        self.assertIn("category=unreachable", output)
+        self.assertNotIn("10.0.0.8:37139", output)
+        self.assertNotIn("secret-token-12345678", output)
+        self.assertNotIn("No route to host", output)
+
+    async def test_shell_failure_invalidates_device_and_next_call_reconnects(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_adb = AsyncMock(
+            side_effect=[
+                (1, "", "error: closed"),
+                (0, "connected to test.invalid:37139", ""),
+                (0, "", ""),
+            ]
+        )
+
+        self.assertEqual(await controller.send_shell_command("dumpsys power"), "")
+        self.assertIsNone(controller.device)
+        self.assertEqual(controller.last_failure.category, stremio_mcp.AdbFailureCategory.TRANSPORT)
+
+        self.assertTrue(await controller.send_key_event(24, delay=0))
+        self.assertEqual(controller.device, "test.invalid:37139")
+        self.assertEqual(controller._run_adb.await_count, 3)
+
+    async def test_failed_connect_attempts_are_serialized_and_cooled_down(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "failed to connect: Connection refused")
+        )
+
+        results = await asyncio.gather(
+            controller.connect(), controller.connect(), controller.connect()
+        )
+
+        self.assertEqual(results, [False, False, False])
+        controller._run_adb.assert_awaited_once_with("connect", "test.invalid:37139")
+
+    async def test_set_volume_reports_shell_failure(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_adb = AsyncMock(return_value=(1, "", "error: device offline"))
+
+        self.assertFalse(await controller.set_volume(8))
+        self.assertEqual(controller.last_failure.category, stremio_mcp.AdbFailureCategory.OFFLINE)
+
+    async def test_set_volume_does_not_treat_empty_mocked_failure_as_success(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.send_shell_command = AsyncMock(return_value="")
+
+        self.assertFalse(await controller.set_volume(8))
+
     async def test_send_shell_command_targets_connected_device(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)
         controller.device = "test.invalid:37139"
@@ -1636,6 +1736,30 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
             "-d",
             uri,
         )
+
+
+class AdbToolFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_response_surfaces_redacted_actionable_failure(self):
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller._run_adb = AsyncMock(
+            return_value=(
+                1,
+                "",
+                "error: device unauthorized at 10.0.0.8:37139",
+            )
+        )
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool(
+            "tv_control", {"category": "volume", "action": "up"}
+        )
+
+        self.assertIn("category=unauthorized", response[0].text)
+        self.assertIn("accept the debugging prompt", response[0].text)
+        self.assertNotIn("10.0.0.8", response[0].text)
+        self.assertNotIn("37139", response[0].text)
 
 
 class DeepLinkTests(unittest.IsolatedAsyncioTestCase):

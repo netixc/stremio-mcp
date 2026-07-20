@@ -205,6 +205,99 @@ register_secret(STREMIO_AUTH_KEY)
 configure_logging()
 
 
+class AdbFailureCategory(str, Enum):
+    """Safe categories for failures reported by the native ADB client."""
+
+    UNREACHABLE = "unreachable"
+    AMBIGUOUS_NETWORK = "ambiguous_network"
+    UNAUTHORIZED = "unauthorized"
+    OFFLINE = "offline"
+    TIMEOUT = "timeout"
+    TRANSPORT = "transport"
+    COMMAND = "command"
+
+
+@dataclass(frozen=True)
+class AdbFailure:
+    """A bounded ADB failure that never retains endpoint or raw stderr text."""
+
+    category: AdbFailureCategory
+
+    def summary(self) -> str:
+        """Return category-level diagnostics suitable for routine logs."""
+        return f"category={self.category.value}"
+
+    def user_message(self) -> str:
+        """Return actionable guidance without exposing endpoint or command data."""
+        guidance = {
+            AdbFailureCategory.UNREACHABLE: (
+                "network reachability is ambiguous; verify the TV is on the same "
+                "LAN and that macOS Local Network access is granted to adb"
+            ),
+            AdbFailureCategory.AMBIGUOUS_NETWORK: (
+                "network connection failed; verify the TV is online and use its "
+                "current connection port"
+            ),
+            AdbFailureCategory.UNAUTHORIZED: (
+                "the TV has not authorized this computer; accept the debugging "
+                "prompt on the TV"
+            ),
+            AdbFailureCategory.OFFLINE: (
+                "the TV is offline; wake it and reconnect using the current "
+                "connection port"
+            ),
+            AdbFailureCategory.TIMEOUT: (
+                "the operation timed out; verify the TV is online and try again"
+            ),
+            AdbFailureCategory.TRANSPORT: (
+                "the ADB transport failed; verify the TV connection and try again"
+            ),
+            AdbFailureCategory.COMMAND: (
+                "the ADB command failed; verify the TV connection and try again"
+            ),
+        }
+        return f"ADB failure ({self.summary()}): {guidance[self.category]}."
+
+
+ADB_RECONNECT_COOLDOWN = 1.0
+
+
+def classify_adb_failure(returncode: int, stdout: str, stderr: str) -> AdbFailure:
+    """Classify known ADB output without echoing or retaining its raw contents."""
+    output = f"{stdout}\n{stderr}".lower()
+    if "unauthorized" in output:
+        category = AdbFailureCategory.UNAUTHORIZED
+    elif re.search(r"\boffline\b", output):
+        category = AdbFailureCategory.OFFLINE
+    elif "timed out" in output or "timeout" in output:
+        category = AdbFailureCategory.TIMEOUT
+    elif any(marker in output for marker in ("transport", "broken pipe", "closed")):
+        category = AdbFailureCategory.TRANSPORT
+    elif (
+        "no route to host" in output
+        or "network is unreachable" in output
+        or "host is unreachable" in output
+    ):
+        # Without a device-backed probe this remains ambiguous between a real
+        # route failure and a macOS Local Network denial.
+        category = AdbFailureCategory.UNREACHABLE
+    elif any(
+        marker in output
+        for marker in (
+            "failed to connect",
+            "connection refused",
+            "cannot connect",
+            "connection reset",
+        )
+    ):
+        category = AdbFailureCategory.AMBIGUOUS_NETWORK
+    elif returncode < 0:
+        category = AdbFailureCategory.TRANSPORT
+    else:
+        category = AdbFailureCategory.COMMAND
+    return AdbFailure(category)
+
+
 class StremioController:
     """Controller for Stremio on Android TV via the native ADB client."""
 
@@ -213,6 +306,10 @@ class StremioController:
         self.port = port
         self.target = f"{host}:{port}"
         self.device: Optional[str] = None
+        self.last_failure: Optional[AdbFailure] = None
+        self._last_shell_succeeded: Optional[bool] = None
+        self._connect_lock = asyncio.Lock()
+        self._next_connect_attempt = 0.0
 
     async def _run_adb(self, *args: str) -> tuple[int, str, str]:
         """Run a terminating ADB command without blocking the MCP event loop."""
@@ -241,17 +338,30 @@ class StremioController:
 
     async def connect(self) -> bool:
         """Connect the native ADB client to the configured Android TV."""
-        returncode, stdout, stderr = await self._run_adb("connect", self.target)
-        output = f"{stdout}\n{stderr}".lower()
-        if returncode == 0 and (
-            "connected to" in output or "already connected to" in output
-        ):
-            self.device = self.target
-            logger.info(f"Connected to Android TV at {self.target}")
-            return True
+        async with self._connect_lock:
+            if self.device:
+                return True
 
-        logger.error(f"Failed to connect to Android TV: {stderr or stdout}")
-        return False
+            now = asyncio.get_running_loop().time()
+            if now < self._next_connect_attempt:
+                return False
+
+            returncode, stdout, stderr = await self._run_adb("connect", self.target)
+            output = f"{stdout}\n{stderr}".lower()
+            if returncode == 0 and (
+                "connected to" in output or "already connected to" in output
+            ):
+                self.device = self.target
+                self.last_failure = None
+                self._next_connect_attempt = 0.0
+                logger.info("Connected to Android TV")
+                return True
+
+            self.device = None
+            self.last_failure = classify_adb_failure(returncode, stdout, stderr)
+            self._next_connect_attempt = now + ADB_RECONNECT_COOLDOWN
+            logger.error("ADB connect failed: %s", self.last_failure.summary())
+            return False
 
     async def disconnect(self):
         """Disconnect the native ADB client from the Android TV."""
@@ -262,12 +372,22 @@ class StremioController:
         self.device = None
         returncode, stdout, stderr = await self._run_adb("disconnect", target)
         if returncode == 0:
+            self.last_failure = None
             logger.info("Disconnected from Android TV")
         else:
-            logger.error(f"Error disconnecting: {stderr or stdout}")
+            self.last_failure = classify_adb_failure(returncode, stdout, stderr)
+            logger.error("ADB disconnect failed: %s", self.last_failure.summary())
 
     async def _ensure_connected(self) -> bool:
         return bool(self.device) or await self.connect()
+
+    def _operation_failed(
+        self, operation: str, returncode: int, stdout: str, stderr: str
+    ) -> None:
+        """Invalidate a possibly stale handle and retain only safe diagnostics."""
+        self.device = None
+        self.last_failure = classify_adb_failure(returncode, stdout, stderr)
+        logger.error("ADB %s failed: %s", operation, self.last_failure.summary())
 
     async def send_intent(self, uri: str) -> bool:
         """Send an intent to open a Stremio deep link."""
@@ -286,11 +406,11 @@ class StremioController:
             uri,
         )
         if returncode != 0:
-            logger.error(f"Failed to send intent: {stderr or stdout}")
+            self._operation_failed("intent", returncode, stdout, stderr)
             return False
 
-        logger.info(f"Sent intent: {uri}")
-        logger.debug(f"Result: {stdout}")
+        self.last_failure = None
+        logger.info("Sent Stremio intent")
         return True
 
     async def send_key_event(self, keycode: int, delay: float = 0.5) -> bool:
@@ -303,14 +423,16 @@ class StremioController:
             "-s", self.device, "shell", "input", "keyevent", str(keycode)
         )
         if returncode != 0:
-            logger.error(f"Failed to send key event: {stderr or stdout}")
+            self._operation_failed("key event", returncode, stdout, stderr)
             return False
 
-        logger.debug(f"Sent keycode {keycode}: {stdout}")
+        self.last_failure = None
+        logger.debug("Sent Android key event")
         return True
 
     async def send_shell_command(self, command: str) -> str:
         """Send a trusted shell command to Android TV and return output."""
+        self._last_shell_succeeded = False
         if not await self._ensure_connected():
             return ""
 
@@ -318,8 +440,10 @@ class StremioController:
             "-s", self.device, "shell", command
         )
         if returncode != 0:
-            logger.error(f"Failed to send shell command: {stderr or stdout}")
+            self._operation_failed("shell command", returncode, stdout, stderr)
             return ""
+        self.last_failure = None
+        self._last_shell_succeeded = True
         return stdout.strip()
 
     # Volume Controls
@@ -342,8 +466,9 @@ class StremioController:
             return False
 
         cmd = f"media volume --stream 3 --set {level}"
-        result = await self.send_shell_command(cmd)
-        return result is not None
+        self._last_shell_succeeded = None
+        await self.send_shell_command(cmd)
+        return self._last_shell_succeeded is True
 
     # Playback Controls
     async def play_pause(self) -> bool:
@@ -1479,6 +1604,14 @@ async def list_tools() -> list[Tool]:
     ]
 
 
+def _adb_failure_text(controller: Any) -> str:
+    """Return safe, actionable ADB text for a failed controller operation."""
+    failure = getattr(controller, "last_failure", None)
+    if isinstance(failure, AdbFailure):
+        return failure.user_message()
+    return "ADB failure (category=unknown): the operation did not complete."
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls"""
@@ -1564,10 +1697,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             if imdb_id:
                 if season and episode:
                     success = await controller.play_content("series", imdb_id, season, episode)
-                    msg = f"S{season:02d}E{episode:02d}" if success else "episode"
+                    msg = (
+                        f"S{season:02d}E{episode:02d}"
+                        if success
+                        else _adb_failure_text(controller)
+                    )
                 else:
                     success = await controller.play_content("movie", imdb_id)
-                    msg = imdb_id if success else "movie"
+                    msg = imdb_id if success else _adb_failure_text(controller)
 
                 return [TextContent(type="text",
                     text=f"{'Now playing' if success else 'Failed to play'}: {msg}")]
@@ -1609,11 +1746,19 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
                     success = await controller.play_content("series", imdb_id, season, episode)
                     return [TextContent(type="text",
-                        text=f"{'Now playing' if success else 'Failed to play'}: {name} S{season:02d}E{episode:02d}")]
+                        text=(
+                            f"Now playing: {name} S{season:02d}E{episode:02d}"
+                            if success
+                            else f"Failed to play: {_adb_failure_text(controller)}"
+                        ))]
                 else:
                     success = await controller.play_content("movie", imdb_id)
                     return [TextContent(type="text",
-                        text=f"{'Now playing' if success else 'Failed to play'}: {name}")]
+                        text=(
+                            f"Now playing: {name}"
+                            if success
+                            else f"Failed to play: {_adb_failure_text(controller)}"
+                        ))]
 
             else:  # source == "search"
                 if not tmdb_client:
@@ -1637,7 +1782,11 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
                     success = await controller.play_content("movie", imdb_id)
                     return [TextContent(type="text",
-                        text=f"{'Now playing' if success else 'Failed to play'}: {results[0].get('title', 'Unknown')}")]
+                        text=(
+                            f"Now playing: {results[0].get('title', 'Unknown')}"
+                            if success
+                            else f"Failed to play: {_adb_failure_text(controller)}"
+                        ))]
 
                 elif content_type == "tv":
                     if not season or not episode:
@@ -1660,7 +1809,11 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
                     success = await controller.play_content("series", imdb_id, season, episode)
                     return [TextContent(type="text",
-                        text=f"{'Now playing' if success else 'Failed to play'}: {results[0].get('name', 'Unknown')} S{season:02d}E{episode:02d}")]
+                        text=(
+                            f"Now playing: {results[0].get('name', 'Unknown')} S{season:02d}E{episode:02d}"
+                            if success
+                            else f"Failed to play: {_adb_failure_text(controller)}"
+                        ))]
 
         elif name == "library":
             if not stremio_client:
@@ -1814,18 +1967,22 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             if category == "volume":
                 if action == "up":
                     success = await controller.volume_up()
-                    msg = "Volume increased" if success else "Failed"
+                    msg = "Volume increased" if success else _adb_failure_text(controller)
                 elif action == "down":
                     success = await controller.volume_down()
-                    msg = "Volume decreased" if success else "Failed"
+                    msg = "Volume decreased" if success else _adb_failure_text(controller)
                 elif action == "mute":
                     success = await controller.volume_mute()
-                    msg = "Muted" if success else "Failed"
+                    msg = "Muted" if success else _adb_failure_text(controller)
                 elif action == "set":
                     if value is None or not (0 <= int(value) <= 15):
                         return [TextContent(type="text", text="Set requires value 0-15")]
                     success = await controller.set_volume(int(value))
-                    msg = f"Volume set to {value}" if success else "Failed"
+                    msg = (
+                        f"Volume set to {value}"
+                        if success
+                        else _adb_failure_text(controller)
+                    )
                 else:
                     return [TextContent(type="text", text=f"Unknown volume action: {action}")]
 
@@ -1847,7 +2004,10 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     return [TextContent(type="text", text=f"Unknown playback action: {action}")]
 
                 success = await actions_map[action]()
-                return [TextContent(type="text", text=f"Playback: {action}" if success else "Failed")]
+                return [TextContent(
+                    type="text",
+                    text=f"Playback: {action}" if success else _adb_failure_text(controller),
+                )]
 
             elif category == "navigate":
                 actions_map = {
@@ -1864,18 +2024,21 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     return [TextContent(type="text", text=f"Unknown navigate action: {action}")]
 
                 success = await actions_map[action]()
-                return [TextContent(type="text", text=f"Navigate: {action}" if success else "Failed")]
+                return [TextContent(
+                    type="text",
+                    text=f"Navigate: {action}" if success else _adb_failure_text(controller),
+                )]
 
             elif category == "power":
                 if action == "wake":
                     success = await controller.tv_wake()
-                    msg = "TV waking up" if success else "Failed"
+                    msg = "TV waking up" if success else _adb_failure_text(controller)
                 elif action == "sleep":
                     success = await controller.tv_sleep()
-                    msg = "TV going to sleep" if success else "Failed"
+                    msg = "TV going to sleep" if success else _adb_failure_text(controller)
                 elif action == "toggle":
                     success = await controller.tv_power()
-                    msg = "Power toggled" if success else "Failed"
+                    msg = "Power toggled" if success else _adb_failure_text(controller)
                 elif action == "status":
                     state = await controller.get_tv_state()
                     return [TextContent(type="text", text=f"TV is {state}")]
