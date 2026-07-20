@@ -41,10 +41,10 @@ jobs:
           import json
           from pathlib import Path
 
-          import requests
+          import httpx
 
           server = json.loads(Path("server.json").read_text())
-          response = requests.post(
+          response = httpx.post(
               "https://registry.modelcontextprotocol.io/v0/validate",
               json=server,
               timeout=30,
