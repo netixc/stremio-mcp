@@ -1749,7 +1749,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="tv_control",
-            description="Control Android TV. volume: up/down/mute/set. playback: play/pause/toggle/stop/next/previous/forward/rewind. navigate: up/down/left/right/select/back/home. power: wake/sleep/toggle/status.",
+            description="Control Android TV. volume: up/down/mute/set. playback: play/pause/toggle/stop/next/previous/forward/rewind; stop succeeds only when playback is verified to have ended (no actively playing session), not merely when a key event is delivered. navigate: up/down/left/right/select/back/home. power: wake/sleep/toggle/status.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1771,7 +1771,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="playback_status",
-            description="Get current playback status. Returns app, title, state (playing/paused/stopped), position, and duration.",
+            description="Get current playback status. Returns app, title, state (playing/paused/stalled/stopped/none/error/unknown; stalled means the session claims playing but audio output is not live), position, and duration.",
             inputSchema={
                 "type": "object",
                 "properties": {}
