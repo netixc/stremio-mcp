@@ -229,6 +229,9 @@ adb devices -l
   Network** to the `adb` binary itself. A reliable pattern is to start the ADB
   server once from a permitted GUI terminal, then let the MCP server and other
   tools act as localhost clients of that existing server.
+- A failure reported as `local_network_denied` means the MCP server itself
+  reached the TV over raw TCP while `adb` could not, so the network is fine:
+  apply the two macOS steps above instead of debugging routing.
 - Do not run `adb kill-server` or `adb start-server` from automated tooling: that
   can discard a permitted server and recreate it under a process without the
   required macOS permission.
