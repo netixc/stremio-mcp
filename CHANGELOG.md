@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- The `mcp` requirement is now `>=1.28.1,<2`, so installs stay on the stable v1 SDK line until a deliberate v2 migration.
 - ADB failures now retain bounded categories such as unreachable, ambiguous network, unauthorized, offline, timeout, and transport failure through the controller and tool responses. User-facing guidance and routine logs omit device endpoints, raw ADB output, credentials, URLs, and command payloads. Failed device operations invalidate stale connection state, connection retries are serialized and bounded, and volume changes no longer report success when the shell command fails.
 - macOS ADB troubleshooting now identifies `adb` as the Local Network-permission binary, documents starting the shared server from a permitted GUI terminal for localhost clients, and forbids automated ADB server lifecycle management.
 - All HTTP work now runs on one lifecycle-managed async `httpx` client with explicit connect, read, write, and pool timeouts, a bounded response body, a bounded connection pool, and cancellation support. Previously TMDB requests were synchronous with no timeout and blocked the whole MCP event loop, freezing unrelated device controls.
