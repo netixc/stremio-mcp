@@ -210,6 +210,9 @@ class AdbFailureCategory(str, Enum):
 
     UNREACHABLE = "unreachable"
     AMBIGUOUS_NETWORK = "ambiguous_network"
+    # Produced only by the connect() probe upgrade, never by
+    # classify_adb_failure(): adb output alone cannot prove a denial.
+    LOCAL_NETWORK_DENIED = "local_network_denied"
     UNAUTHORIZED = "unauthorized"
     OFFLINE = "offline"
     TIMEOUT = "timeout"
@@ -239,6 +242,14 @@ class AdbFailure:
                 "use its current connection port, and on macOS check that Local "
                 "Network access is granted to adb"
             ),
+            AdbFailureCategory.LOCAL_NETWORK_DENIED: (
+                "the TV accepted a direct connection from this process while "
+                "adb could not reach it, so this is an adb permission or "
+                "ADB-server problem, not a network failure; on macOS grant adb "
+                "Local Network access (System Settings > Privacy & Security > "
+                "Local Network) or reuse an ADB server started from a GUI "
+                "terminal that has the permission"
+            ),
             AdbFailureCategory.UNAUTHORIZED: (
                 "the TV has not authorized this computer; accept the debugging "
                 "prompt on the TV"
@@ -262,6 +273,16 @@ class AdbFailure:
 
 ADB_RECONNECT_COOLDOWN = 1.0
 
+# The issue #21 differential probe must stay a single short attempt so a
+# silently dropping network cannot stall the serialized connect path.
+ADB_PROBE_TIMEOUT = 2.0
+
+# Failure shapes a masked adb-side denial is known to produce: EHOSTUNREACH
+# text and silently dropped or reset connect attempts.
+PROBE_ELIGIBLE_CATEGORIES = frozenset(
+    {AdbFailureCategory.UNREACHABLE, AdbFailureCategory.AMBIGUOUS_NETWORK}
+)
+
 
 def classify_adb_failure(returncode: int, stdout: str, stderr: str) -> AdbFailure:
     """Classify known ADB output without echoing or retaining its raw contents."""
@@ -275,8 +296,8 @@ def classify_adb_failure(returncode: int, stdout: str, stderr: str) -> AdbFailur
         or "network is unreachable" in output
         or "host is unreachable" in output
     ):
-        # Without a device-backed probe this remains ambiguous between a real
-        # route failure and a macOS Local Network denial.
+        # Textually identical to a macOS Local Network denial; connect()
+        # disambiguates with a raw TCP probe of the configured endpoint.
         category = AdbFailureCategory.UNREACHABLE
     elif any(
         marker in output
@@ -339,6 +360,28 @@ class StremioController:
             stderr.decode(errors="replace").strip(),
         )
 
+    async def _probe_tcp_reachability(self) -> bool:
+        """Attempt one bounded raw TCP connect to the configured endpoint.
+
+        TCP acceptance alone is the differential, so no protocol bytes are
+        written and the socket closes immediately. Success proves the device
+        answers this process even though adb could not reach it. Failure
+        proves nothing — the probing process may itself be denied — so the
+        caller must keep its original diagnosis when this returns False.
+        """
+
+        async def connect_and_close() -> None:
+            _, writer = await asyncio.open_connection(self.host, self.port)
+            writer.close()
+            with contextlib.suppress(OSError):
+                await writer.wait_closed()
+
+        try:
+            await asyncio.wait_for(connect_and_close(), timeout=ADB_PROBE_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        return True
+
     async def connect(self) -> bool:
         """Connect the native ADB client to the configured Android TV."""
         async with self._connect_lock:
@@ -361,7 +404,13 @@ class StremioController:
                 return True
 
             self.device = None
-            self.last_failure = classify_adb_failure(returncode, stdout, stderr)
+            failure = classify_adb_failure(returncode, stdout, stderr)
+            if (
+                failure.category in PROBE_ELIGIBLE_CATEGORIES
+                and await self._probe_tcp_reachability()
+            ):
+                failure = AdbFailure(AdbFailureCategory.LOCAL_NETWORK_DENIED)
+            self.last_failure = failure
             self._next_connect_attempt = now + ADB_RECONNECT_COOLDOWN
             logger.error("ADB connect failed: %s", self.last_failure.summary())
             return False

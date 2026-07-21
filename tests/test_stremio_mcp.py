@@ -1,10 +1,14 @@
 import asyncio
 import contextlib
+import errno
 import io
 import json
 import logging
+import os
 import re
+import socket
 import sys
+import tempfile
 import time
 import unittest
 from importlib.metadata import distribution
@@ -1638,6 +1642,7 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(category=category):
                 controller = stremio_mcp.StremioController("10.0.0.8", 37139)
                 controller._run_adb = AsyncMock(return_value=(1, "", stderr))
+                controller._probe_tcp_reachability = AsyncMock(return_value=False)
 
                 self.assertFalse(await controller.connect())
                 self.assertEqual(controller.last_failure.category, category)
@@ -1654,6 +1659,7 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
                 "secret-token-12345678",
             )
         )
+        controller._probe_tcp_reachability = AsyncMock(return_value=False)
 
         with capture_all_logs() as stream:
             self.assertFalse(await controller.connect())
@@ -1688,6 +1694,7 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
         controller._run_adb = AsyncMock(
             return_value=(1, "", "failed to connect: Connection refused")
         )
+        controller._probe_tcp_reachability = AsyncMock(return_value=False)
 
         results = await asyncio.gather(
             controller.connect(), controller.connect(), controller.connect()
@@ -2147,6 +2154,257 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
             "-d",
             uri,
         )
+
+
+class AdbLocalNetworkPreflightTests(unittest.IsolatedAsyncioTestCase):
+    """Issue #21: a raw TCP differential probe splits a masked adb denial
+    (macOS Local Network, or a server started without the permission) from a
+    genuine network failure. The probe may only ever upgrade an ambiguous
+    diagnosis on success; a failed probe proves nothing because the probing
+    process may itself be denied."""
+
+    async def _start_listener(self):
+        """Serve one loopback port; record what each client sends before EOF."""
+        received = []
+        handled = asyncio.Event()
+
+        async def handle(reader, writer):
+            received.append(await reader.read(1024))
+            writer.close()
+            handled.set()
+
+        server = await asyncio.start_server(handle, host="127.0.0.1", port=0)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        return server.sockets[0].getsockname()[1], received, handled
+
+    def _closed_port(self):
+        """Reserve then release a loopback port so a connect is refused."""
+        with socket.socket() as probe_socket:
+            probe_socket.bind(("127.0.0.1", 0))
+            return probe_socket.getsockname()[1]
+
+    async def test_denied_adb_with_reachable_endpoint_reports_denial(self):
+        port, received, handled = await self._start_listener()
+        workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(workdir.cleanup)
+        transcript = Path(workdir.name) / "adb-args.log"
+        fake_adb = Path(workdir.name) / "fake-adb"
+        fake_adb.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{transcript}"\n'
+            f"echo \"failed to connect to '127.0.0.1:{port}': "
+            'No route to host" >&2\n'
+            "exit 1\n"
+        )
+        os.chmod(fake_adb, 0o755)
+
+        controller = stremio_mcp.StremioController("127.0.0.1", port)
+        with patch.object(stremio_mcp, "ADB_PATH", str(fake_adb)):
+            with capture_all_logs() as stream:
+                self.assertFalse(await controller.connect())
+
+        self.assertEqual(
+            controller.last_failure.category,
+            stremio_mcp.AdbFailureCategory.LOCAL_NETWORK_DENIED,
+        )
+        message = controller.last_failure.user_message()
+        self.assertIn("Local Network", message)
+        self.assertIn("GUI terminal", message)
+        self.assertNotIn("127.0.0.1", message)
+        self.assertNotIn(str(port), message)
+
+        # The endpoint check is scoped to this module's records: the test
+        # runner's debug-mode loop makes asyncio itself emit DEBUG reprs of
+        # the test's own loopback listener, which production (no loop debug)
+        # never logs. The adb stderr text must appear nowhere at all.
+        output = stream.getvalue()
+        module_records = "\n".join(
+            line for line in output.splitlines() if line.startswith("stremio-mcp ")
+        )
+        self.assertIn("category=local_network_denied", module_records)
+        self.assertNotIn("127.0.0.1", module_records)
+        self.assertNotIn(str(port), module_records)
+        self.assertNotIn("No route to host", output)
+
+        # The probe is one silent connection: no bytes before EOF, no second
+        # attempt, and no ADB server lifecycle command.
+        await asyncio.wait_for(handled.wait(), timeout=5)
+        self.assertEqual(received, [b""])
+        adb_calls = transcript.read_text()
+        self.assertIn("connect", adb_calls)
+        self.assertNotIn("kill-server", adb_calls)
+        self.assertNotIn("start-server", adb_calls)
+
+    async def test_ambiguous_network_with_reachable_endpoint_reports_denial(self):
+        port, received, handled = await self._start_listener()
+        controller = stremio_mcp.StremioController("127.0.0.1", port)
+        controller._run_adb = AsyncMock(
+            return_value=(
+                1,
+                "",
+                f"failed to connect to '127.0.0.1:{port}': Operation timed out",
+            )
+        )
+
+        self.assertFalse(await controller.connect())
+
+        self.assertEqual(
+            controller.last_failure.category,
+            stremio_mcp.AdbFailureCategory.LOCAL_NETWORK_DENIED,
+        )
+        await asyncio.wait_for(handled.wait(), timeout=5)
+        self.assertEqual(received, [b""])
+
+    async def test_refused_probe_keeps_the_original_diagnosis(self):
+        controller = stremio_mcp.StremioController("127.0.0.1", self._closed_port())
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "failed to connect: No route to host")
+        )
+
+        self.assertFalse(await controller.connect())
+
+        self.assertEqual(
+            controller.last_failure.category,
+            stremio_mcp.AdbFailureCategory.UNREACHABLE,
+        )
+
+    async def test_hung_probe_is_bounded_and_keeps_the_original_diagnosis(self):
+        attempts = 0
+
+        async def hang(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            await asyncio.sleep(60)
+
+        controller = stremio_mcp.StremioController("10.66.77.88", 41234)
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "failed to connect: No route to host")
+        )
+
+        started = time.monotonic()
+        with patch.object(stremio_mcp, "ADB_PROBE_TIMEOUT", 0.05):
+            with patch("asyncio.open_connection", new=hang):
+                self.assertFalse(await controller.connect())
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 1.0)
+        self.assertEqual(attempts, 1)
+        self.assertEqual(
+            controller.last_failure.category,
+            stremio_mcp.AdbFailureCategory.UNREACHABLE,
+        )
+
+    async def test_probe_ehostunreach_keeps_diagnosis_and_stays_private(self):
+        async def denied(*args, **kwargs):
+            raise OSError(
+                errno.EHOSTUNREACH, "no route to sentinel 10.66.77.88:41234"
+            )
+
+        controller = stremio_mcp.StremioController("10.66.77.88", 41234)
+        controller._run_adb = AsyncMock(
+            return_value=(
+                1,
+                "",
+                "failed to connect to '10.66.77.88:41234': No route to host",
+            )
+        )
+
+        with patch("asyncio.open_connection", new=denied):
+            with capture_all_logs() as stream:
+                self.assertFalse(await controller.connect())
+
+        self.assertEqual(
+            controller.last_failure.category,
+            stremio_mcp.AdbFailureCategory.UNREACHABLE,
+        )
+        output = stream.getvalue()
+        self.assertIn("category=unreachable", output)
+        self.assertNotIn("10.66.77.88", output)
+        self.assertNotIn("41234", output)
+        self.assertNotIn("sentinel", output)
+
+    async def test_probe_resolver_failure_keeps_the_original_diagnosis(self):
+        async def unresolvable(*args, **kwargs):
+            raise socket.gaierror(-2, "Name or service not known: sentinel-tv.invalid")
+
+        controller = stremio_mcp.StremioController("sentinel-tv.invalid", 41234)
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "failed to connect: No route to host")
+        )
+
+        with patch("asyncio.open_connection", new=unresolvable):
+            with capture_all_logs() as stream:
+                self.assertFalse(await controller.connect())
+
+        self.assertEqual(
+            controller.last_failure.category,
+            stremio_mcp.AdbFailureCategory.UNREACHABLE,
+        )
+        self.assertNotIn("sentinel-tv.invalid", stream.getvalue())
+
+    async def test_probe_only_runs_for_network_shaped_failures(self):
+        cases = (
+            "error: device unauthorized",
+            "error: device offline",
+            "ADB command timed out",
+            "error: unknown command",
+        )
+        for stderr in cases:
+            with self.subTest(stderr=stderr):
+                controller = stremio_mcp.StremioController("10.66.77.88", 41234)
+                controller._run_adb = AsyncMock(return_value=(1, "", stderr))
+                probe = AsyncMock(return_value=True)
+                controller._probe_tcp_reachability = probe
+
+                self.assertFalse(await controller.connect())
+
+                probe.assert_not_awaited()
+
+    async def test_concurrent_failed_connects_probe_once(self):
+        controller = stremio_mcp.StremioController("10.66.77.88", 41234)
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "failed to connect: No route to host")
+        )
+        probe = AsyncMock(return_value=True)
+        controller._probe_tcp_reachability = probe
+
+        results = await asyncio.gather(
+            controller.connect(), controller.connect(), controller.connect()
+        )
+
+        self.assertEqual(results, [False, False, False])
+        controller._run_adb.assert_awaited_once_with("connect", "10.66.77.88:41234")
+        probe.assert_awaited_once()
+
+    def test_probe_timeout_default_is_bounded(self):
+        self.assertGreater(stremio_mcp.ADB_PROBE_TIMEOUT, 0)
+        self.assertLessEqual(stremio_mcp.ADB_PROBE_TIMEOUT, 5.0)
+
+    async def test_tool_response_reports_denial_without_endpoint(self):
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.66.77.88", 41234)
+        controller._run_adb = AsyncMock(
+            return_value=(
+                1,
+                "",
+                "failed to connect to '10.66.77.88:41234': No route to host",
+            )
+        )
+        controller._probe_tcp_reachability = AsyncMock(return_value=True)
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool(
+            "tv_control", {"category": "volume", "action": "up"}
+        )
+
+        text = response[0].text
+        self.assertIn("category=local_network_denied", text)
+        self.assertIn("Local Network", text)
+        self.assertIn("GUI terminal", text)
+        self.assertNotIn("10.66.77.88", text)
+        self.assertNotIn("41234", text)
 
 
 class AdbToolFailureTests(unittest.IsolatedAsyncioTestCase):
