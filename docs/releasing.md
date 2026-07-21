@@ -18,7 +18,7 @@ The GitHub `pypi` environment restricts deployments to tags matching `v*` and re
 
 ## Publish a version
 
-1. Confirm the version matches in `pyproject.toml`, `server.json`, `uv.lock`, and the changelog heading.
+1. Confirm the version matches in `pyproject.toml`, `server.json`, `uv.lock`, the changelog heading, and the pinned `uvx --from stremio-mcp-server==<version>` install example in `README.md`.
 2. Replace `Unreleased` in `CHANGELOG.md` with the ISO release date.
 3. Run the full local verification documented in `AGENTS.md`.
 4. Commit and push the release metadata, then wait for CI to pass.

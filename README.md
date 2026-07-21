@@ -47,7 +47,7 @@ uvx stremio-mcp-server
 To run the current release explicitly:
 
 ```bash
-uvx --from stremio-mcp-server==0.1.0 stremio-mcp-server
+uvx --from stremio-mcp-server==0.2.0 stremio-mcp-server
 ```
 
 ### Source checkout
