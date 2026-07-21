@@ -2033,6 +2033,38 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stopped)
         self.assertIn("could not be read over ADB", reason)
 
+    async def test_playback_status_reports_a_failed_dump_as_an_adb_failure(self):
+        """An unreadable dump must not read as an authoritative empty session."""
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller.device = "10.0.0.8:37139"
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "error: device unauthorized at 10.0.0.8:37139")
+        )
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool("playback_status", {})
+
+        self.assertNotIn("No active media session found", response[0].text)
+        self.assertIn("category=unauthorized", response[0].text)
+        self.assertNotIn("10.0.0.8", response[0].text)
+
+    async def test_playback_status_still_reports_an_authoritative_empty_session(self):
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller.device = "10.0.0.8:37139"
+        controller._run_shell = AsyncMock(
+            return_value=(True, "Sessions Stack - have 0 sessions:\n")
+        )
+        controller.send_shell_command = AsyncMock(return_value="")
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool("playback_status", {})
+
+        self.assertEqual(response[0].text, "No active media session found")
+
     async def test_buffering_session_is_not_reported_as_stopped(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)
         controller.device = "test.invalid:37139"

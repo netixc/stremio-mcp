@@ -770,6 +770,7 @@ class StremioController:
         owner_uid = meta["owner_uid"]
         playback_updated = meta["updated"]
         playback_speed = meta["speed"]
+        status["dump_ok"] = meta["dump_ok"]
 
         if not meta["session_found"]:
             return status
@@ -2232,6 +2233,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text="Error: ANDROID_TV_HOST not configured.")]
 
             status = await controller.get_playback_status()
+
+            if not status.get("dump_ok"):
+                return [TextContent(type="text", text=_adb_failure_text(controller))]
 
             if not status["app"]:
                 return [TextContent(type="text", text="No active media session found")]
