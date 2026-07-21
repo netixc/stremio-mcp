@@ -30,7 +30,7 @@ A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server
 - For modern Wireless Debugging on TV: **Android TV / Google TV running Android 13 (API 33) or higher**, per Google's [wireless adb requirements](https://developer.android.com/tools/adb#wireless-android-11)
 - [Python 3.10+](https://www.python.org/downloads/)
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb`) — install a **current release** and keep it updated; use at least the wireless-debugging era of Platform Tools (**30.0.0+**, when `adb pair` landed). Prefer the latest stable from the Platform Tools page (37.x at the time of writing) for mDNS and TLS fixes
+- [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb`) — install a **current release** and keep it updated; use at least the wireless-debugging era of Platform Tools (**30.0.0+**, when `adb pair` landed). Prefer the latest stable from the Platform Tools page for mDNS and TLS fixes
 - A free [TMDB API key](https://www.themoviedb.org/settings/api) for title search
 - Optional: a [Stremio auth key](https://github.com/netixc/stremio-mcp/blob/main/docs/stremio-auth-key.md) for library access
 
