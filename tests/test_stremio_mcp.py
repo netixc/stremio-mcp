@@ -3,8 +3,10 @@ import contextlib
 import io
 import json
 import logging
+import re
 import sys
 import time
+import tomllib
 import unittest
 from importlib.metadata import distribution
 from pathlib import Path
@@ -765,6 +767,61 @@ class CliTests(unittest.TestCase):
         asyncio_run.assert_called_once_with(sentinel.main_coroutine)
 
 
+def _project_dependency(root: Path, name: str) -> str:
+    """Return the PEP 508 dependency string for ``name`` from pyproject.toml."""
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    prefix = name.casefold()
+    matches = []
+    for dep in data["project"]["dependencies"]:
+        dep_name = re.split(r"[<>=!~\[]", dep, maxsplit=1)[0].strip().casefold()
+        if dep_name == prefix:
+            matches.append(dep)
+    if len(matches) != 1:
+        raise AssertionError(f"expected one {name!r} dependency, found {matches!r}")
+    return matches[0]
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Parse a simple dotted release version for bound checks (no pre-releases)."""
+    core = version.split("+", 1)[0]
+    if any(marker in core for marker in ("a", "b", "rc", "dev", "post")):
+        # Keep digits only up to the first pre-release marker for this test helper.
+        match = re.match(r"^(\d+(?:\.\d+)*)", core)
+        if not match:
+            raise ValueError(f"unsupported version: {version!r}")
+        core = match.group(1)
+    return tuple(int(part) for part in core.split("."))
+
+
+def _cmp_version(left: str, right: str) -> int:
+    a = _version_tuple(left)
+    b = _version_tuple(right)
+    width = max(len(a), len(b))
+    a += (0,) * (width - len(a))
+    b += (0,) * (width - len(b))
+    return (a > b) - (a < b)
+
+
+def _requirement_contains(requirement: str, version: str) -> bool:
+    """Evaluate simple PEP 508 version clauses (``>=``, ``>``, ``<=``, ``<``, ``==``)."""
+    clauses = re.findall(r"(>=|<=|>|<|==)\s*([0-9][0-9A-Za-z.\-_]*)", requirement)
+    if not clauses:
+        return True
+    for operator, bound in clauses:
+        order = _cmp_version(version, bound)
+        if operator == ">=" and order < 0:
+            return False
+        if operator == ">" and order <= 0:
+            return False
+        if operator == "<=" and order > 0:
+            return False
+        if operator == "<" and order >= 0:
+            return False
+        if operator == "==" and order != 0:
+            return False
+    return True
+
+
 class ReleaseMetadataTests(unittest.TestCase):
     def test_registry_metadata_matches_the_python_distribution(self):
         root = Path(__file__).resolve().parents[1]
@@ -791,6 +848,32 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(
             "<!-- mcp-name: io.github.netixc/stremio-mcp -->",
             (root / "README.md").read_text(),
+        )
+
+    def test_mcp_dependency_stays_on_stable_v1(self):
+        """Pin the official SDK to v1 until a deliberate v2 migration.
+
+        Fail-before (unchanged ``mcp>=1.28.1``) accepted ``2.0.0``; the upper
+        bound must reject it while still accepting the locked v1 baseline.
+        """
+        root = Path(__file__).resolve().parents[1]
+        requirement = _project_dependency(root, "mcp")
+        self.assertEqual(requirement, "mcp>=1.28.1,<2")
+        self.assertTrue(
+            _requirement_contains(requirement, "1.28.1"),
+            f"{requirement!r} must accept the v1 baseline 1.28.1",
+        )
+        self.assertTrue(
+            _requirement_contains(requirement, "1.99.0"),
+            f"{requirement!r} must accept later v1 releases",
+        )
+        self.assertFalse(
+            _requirement_contains(requirement, "2.0.0"),
+            f"{requirement!r} must reject MCP v2.0.0",
+        )
+        self.assertFalse(
+            _requirement_contains(requirement, "2.0.0b2"),
+            f"{requirement!r} must reject MCP v2 pre-releases used as 2.0.0 core",
         )
 
 
