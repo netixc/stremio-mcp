@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import logging
+import re
 import sys
 import time
 import unittest
@@ -765,6 +766,48 @@ class CliTests(unittest.TestCase):
         asyncio_run.assert_called_once_with(sentinel.main_coroutine)
 
 
+def _project_dependencies(root: Path) -> list[str]:
+    """Read ``[project].dependencies`` as text.
+
+    ``tomllib`` is Python 3.11+ while this project supports 3.10, and no TOML
+    parser is a declared dependency, so the array is scanned directly.
+    """
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    table = re.search(
+        r"^\[project\]\s*$(.*?)(?=^\[|\Z)", text, flags=re.MULTILINE | re.DOTALL
+    )
+    if table is None:
+        raise AssertionError("pyproject.toml has no [project] table")
+    array = re.search(
+        r"^dependencies\s*=\s*\[(.*?)\]",
+        table.group(1),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if array is None:
+        raise AssertionError("[project] declares no dependencies array")
+    return re.findall(r"[\"']([^\"']+)[\"']", array.group(1))
+
+
+def _project_dependency(root: Path, name: str) -> str:
+    """Return the PEP 508 dependency string for ``name`` from pyproject.toml."""
+    wanted = name.casefold()
+    matches = [
+        dep
+        for dep in _project_dependencies(root)
+        if re.split(r"[<>=!~\[]", dep, maxsplit=1)[0].strip().casefold() == wanted
+    ]
+    if len(matches) != 1:
+        raise AssertionError(f"expected one {name!r} dependency, found {matches!r}")
+    return matches[0]
+
+
+def _requirement_clauses(requirement: str) -> set:
+    """Return the ``(operator, version)`` clauses declared by a requirement."""
+    return set(
+        re.findall(r"(>=|<=|==|!=|~=|>|<)\s*([0-9][0-9A-Za-z.\-_]*)", requirement)
+    )
+
+
 class ReleaseMetadataTests(unittest.TestCase):
     def test_registry_metadata_matches_the_python_distribution(self):
         root = Path(__file__).resolve().parents[1]
@@ -791,6 +834,21 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(
             "<!-- mcp-name: io.github.netixc/stremio-mcp -->",
             (root / "README.md").read_text(),
+        )
+
+    def test_mcp_dependency_stays_on_stable_v1(self):
+        """Pin the official SDK to v1 until a deliberate v2 migration.
+
+        Fail-before (unchanged ``mcp>=1.28.1``) accepted ``2.0.0``; the upper
+        bound must reject it while still accepting the locked v1 baseline.
+        """
+        root = Path(__file__).resolve().parents[1]
+        requirement = _project_dependency(root, "mcp")
+        self.assertEqual(requirement, "mcp>=1.28.1,<2")
+        self.assertEqual(
+            _requirement_clauses(requirement),
+            {(">=", "1.28.1"), ("<", "2")},
+            f"{requirement!r} must floor at the locked v1 baseline and exclude 2.x",
         )
 
 

@@ -27,9 +27,10 @@ A Python [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server
 ## Requirements
 
 - Android TV with [Stremio](https://www.stremio.com/) installed and configured with working addons
+- For modern Wireless Debugging on TV: **Android TV / Google TV running Android 13 (API 33) or higher**, per Google's [wireless adb requirements](https://developer.android.com/tools/adb#wireless-android-11)
 - [Python 3.10+](https://www.python.org/downloads/)
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb`)
+- [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools) (`adb`) — install a **current release** and keep it updated; use at least the wireless-debugging era of Platform Tools (**30.0.0+**, when `adb pair` landed). Prefer the latest stable from the Platform Tools page for mDNS and TLS fixes
 - A free [TMDB API key](https://www.themoviedb.org/settings/api) for title search
 - Optional: a [Stremio auth key](https://github.com/netixc/stremio-mcp/blob/main/docs/stremio-auth-key.md) for library access
 
@@ -72,9 +73,11 @@ STREMIO_AUTH_KEY=
 
 ## Pair and connect the TV
 
-On the TV, enable **Developer options** and **Wireless debugging**. Menu names vary by manufacturer.
+This server talks to the TV through the **native Platform Tools `adb` client**, not a pure-Python ADB library. That is intentional: modern Wireless Debugging negotiates TLS (`STLS`) and this project needs a full shell for intents, key events, and media-session diagnostics. Pure-Python clients that only speak legacy ADB-over-TCP do not cover that path.
 
-Modern Wireless Debugging displays separate pairing and connection ports:
+On the TV, enable **Developer options** and **Wireless debugging**. Menu names vary by manufacturer. Official wireless debugging for TV requires **Android 13+**; see Google's [Connect to a device over Wi-Fi](https://developer.android.com/tools/adb#wireless-android-11) guide.
+
+Modern Wireless Debugging displays **separate pairing and connection ports** (often ephemeral). Pair once, then connect with the current connection port:
 
 ```bash
 adb pair TV_IP:PAIRING_PORT
@@ -84,9 +87,9 @@ adb connect TV_IP:CONNECTION_PORT
 adb devices -l
 ```
 
-Set `ANDROID_TV_PORT` to the **connection port**, not the temporary pairing port. The device must appear as `device`, not `offline` or `unauthorized`. Wireless Debugging ports may change after a reboot or after debugging is toggled.
+Set `ANDROID_TV_PORT` to the **connection port**, not the temporary pairing port. The device must appear as `device`, not `offline` or `unauthorized`. Wireless Debugging ports may change after a reboot or after debugging is toggled. On newer Platform Tools and Android versions, a previously paired device may also reconnect via mDNS when it returns to a trusted network; still configure the explicit connection port when the UI shows one.
 
-Legacy network debugging may use port `5555`; only use it when your TV explicitly documents that workflow.
+Legacy network debugging may use port `5555` (`adb tcpip` after USB); only use that workflow when your TV explicitly documents it. Prefer Wireless Debugging on supported TVs.
 
 ## Configure your MCP client
 
