@@ -178,7 +178,7 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 ANDROID_TV_HOST = os.getenv("ANDROID_TV_HOST", "")
-ANDROID_TV_PORT = int(os.getenv("ANDROID_TV_PORT", "5555"))
+ANDROID_TV_PORT = _env_int("ANDROID_TV_PORT", 5555, 1, 65535)
 STREMIO_AUTH_KEY = os.getenv("STREMIO_AUTH_KEY", "")
 ADB_PATH = os.getenv("ADB_PATH", "adb")
 

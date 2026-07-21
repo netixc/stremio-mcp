@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -755,6 +756,102 @@ class InitializationTests(unittest.TestCase):
                 self.assertEqual(
                     stremio_mcp._env_int("STREMIO_MCP_MAX_CONNECTIONS", 8, 1, 64), 8
                 )
+
+
+class AndroidTvPortConfigTests(unittest.TestCase):
+    """ANDROID_TV_PORT is parsed at import; invalid values must not crash startup.
+
+    Module-global env parsing is exercised in a fresh subprocess so the
+    import-time assignment is re-evaluated for each case.
+    """
+
+    _DEFAULT = 5555
+    _PROBE = (
+        "import logging, sys\n"
+        "logging.basicConfig(level=logging.WARNING, stream=sys.stderr)\n"
+        "import stremio_mcp\n"
+        "print(stremio_mcp.ANDROID_TV_PORT)\n"
+    )
+
+    def _import_port(self, port_value: str | None) -> tuple[int, str, str]:
+        env = os.environ.copy()
+        # Isolate from the parent process's device configuration.
+        env.pop("ANDROID_TV_HOST", None)
+        env.pop("TMDB_API_KEY", None)
+        env.pop("STREMIO_AUTH_KEY", None)
+        if port_value is None:
+            env.pop("ANDROID_TV_PORT", None)
+        else:
+            env["ANDROID_TV_PORT"] = port_value
+        completed = subprocess.run(
+            [sys.executable, "-c", self._PROBE],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return completed.returncode, completed.stdout.strip(), completed.stderr
+
+    def _assert_defaults(
+        self, port_value: str | None, *, expect_warning: bool, raw_echo: str | None
+    ) -> None:
+        code, stdout, stderr = self._import_port(port_value)
+        self.assertEqual(
+            code,
+            0,
+            f"import crashed for ANDROID_TV_PORT={port_value!r}: {stderr}",
+        )
+        self.assertEqual(stdout, str(self._DEFAULT))
+        if expect_warning:
+            self.assertIn("ANDROID_TV_PORT", stderr)
+            self.assertIn("using the default", stderr)
+        if raw_echo:
+            self.assertNotIn(raw_echo, stderr)
+
+    def test_absent_uses_default(self):
+        code, stdout, stderr = self._import_port(None)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stdout, str(self._DEFAULT))
+
+    def test_empty_uses_default_without_crash(self):
+        self._assert_defaults("", expect_warning=False, raw_echo=None)
+
+    def test_whitespace_uses_default_without_echoing(self):
+        # Whitespace-only is truthy to os.getenv, so the helper warns and
+        # falls back without echoing the configured text.
+        self._assert_defaults("   ", expect_warning=True, raw_echo=None)
+        code, stdout, stderr = self._import_port("   ")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stdout, str(self._DEFAULT))
+        self.assertIn("ANDROID_TV_PORT is not an integer", stderr)
+
+    def test_quoted_uses_default_without_echoing(self):
+        raw = '"37139"'
+        self._assert_defaults(raw, expect_warning=True, raw_echo=raw)
+
+    def test_nonnumeric_uses_default_without_echoing(self):
+        self._assert_defaults("abc", expect_warning=True, raw_echo="abc")
+
+    def test_negative_uses_default_without_echoing(self):
+        self._assert_defaults("-1", expect_warning=True, raw_echo="-1")
+
+    def test_zero_uses_default_without_echoing(self):
+        self._assert_defaults("0", expect_warning=True, raw_echo="0")
+
+    def test_above_range_uses_default_without_echoing(self):
+        self._assert_defaults("70000", expect_warning=True, raw_echo="70000")
+
+    def test_valid_custom_port_is_preserved(self):
+        code, stdout, stderr = self._import_port("37139")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(stdout, "37139")
+
+    def test_boundary_ports_are_preserved(self):
+        for port in ("1", "65535"):
+            with self.subTest(port=port):
+                code, stdout, stderr = self._import_port(port)
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(stdout, port)
 
 
 class CliTests(unittest.TestCase):
