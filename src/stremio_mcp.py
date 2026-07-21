@@ -489,8 +489,74 @@ class StremioController:
         return await self.send_key_event(127, delay=0)  # KEYCODE_MEDIA_PAUSE
 
     async def media_stop(self) -> bool:
-        """Stop media"""
-        return await self.send_key_event(86, delay=0)  # KEYCODE_MEDIA_STOP
+        """Stop media and verify the Stremio session is no longer playing."""
+        stopped, _ = await self.stop_playback()
+        return stopped
+
+    async def stop_playback(self) -> tuple[bool, Optional[str]]:
+        """Stop media and report the post-condition outcome for this call.
+
+        Stremio/VLC often ignores KEYCODE_MEDIA_STOP while still accepting
+        pause/play. Success is defined by post-condition (no active playback),
+        not by ADB accepting a key event. Bounded fallbacks: media-session
+        dispatch, pause+back, then force-stop the Stremio package.
+
+        Returns (stopped, reason). ``reason`` is None when the failure is an
+        ADB failure the caller should describe from ``last_failure``.
+        """
+        # 1) Preferred media-session stop path (dispatch + classic keyevent).
+        await self._run_shell("cmd media_session dispatch stop")
+        await self.send_key_event(86, delay=0)  # KEYCODE_MEDIA_STOP
+        await asyncio.sleep(0.45)
+        stopped, reason = await self._is_playback_stopped()
+        if stopped:
+            return True, None
+
+        # 2) Pause is known to work and stops advancement; leave the player UI.
+        await self.media_pause()
+        await self.nav_back()
+        await asyncio.sleep(0.35)
+        stopped, reason = await self._is_playback_stopped()
+        if stopped:
+            return True, None
+
+        # 3) Last bounded fallback: end Stremio so media cannot keep playing.
+        forced, _ = await self._run_shell("am force-stop com.stremio.one")
+        if not forced:
+            return False, None
+        await asyncio.sleep(0.45)
+        stopped, reason = await self._is_playback_stopped()
+        if stopped:
+            return True, None
+        return False, (
+            f"Stop failed: {reason} after media-session stop, pause and back, "
+            "and force-stop."
+        )
+
+    async def _is_playback_stopped(self) -> tuple[bool, str]:
+        """Whether there is no Stremio active playback left to stop.
+
+        Uses only the media-session dump: audio corroboration, uptime, and
+        extractor duration are irrelevant to the stop post-condition. Fails
+        closed when the dump cannot be read and on any state that was not
+        positively parsed as stopped (for example BUFFERING or CONNECTING).
+        """
+        status, meta = await self._read_session_status()
+        if not meta.get("dump_ok"):
+            return False, "the media session state could not be read over ADB"
+        if status.get("playing"):
+            return False, (
+                "the Stremio media session still reports active playback "
+                f"(state={status.get('state')})"
+            )
+        if not meta.get("session_found") or not status.get("app"):
+            return True, ""
+        state = status.get("state")
+        if state in ("stopped", "none"):
+            return True, ""
+        return False, (
+            f"the Stremio media session is not stopped (state={state})"
+        )
 
     async def media_next(self) -> bool:
         """Skip to next"""
@@ -565,9 +631,13 @@ class StremioController:
             return "off"
         return "unknown"
 
-    async def get_playback_status(self) -> dict:
-        """Get current playback status from media session"""
-        result = await self.send_shell_command("dumpsys media_session")
+    async def _read_session_status(self) -> tuple[dict, dict]:
+        """Parse Stremio's media-session block from a single dumpsys call.
+
+        Returns the raw status plus the extrapolation inputs (owner uid,
+        update time, speed) needed by the fuller status path.
+        """
+        dump_ok, result = await self._run_shell("dumpsys media_session")
 
         status = {
             "playing": False,
@@ -578,8 +648,16 @@ class StremioController:
             "state": "stopped"
         }
 
+        meta: dict = {
+            "owner_uid": None,
+            "updated": None,
+            "speed": 0.0,
+            "session_found": False,
+            "dump_ok": dump_ok,
+        }
+
         if not result:
-            return status
+            return status, meta
 
         # dumpsys includes every media session. Restrict parsing to Stremio's
         # block so inactive Bluetooth/Netflix positions cannot overwrite it.
@@ -598,15 +676,30 @@ class StremioController:
                     :first_line_end + next_header.start()
                 ]
             result = session_result
+        else:
+            # Without a Stremio session, do not let other apps' PlaybackState
+            # lines paint a fake Stremio status.
+            return status, meta
+
+        meta["session_found"] = True
+        # A Stremio session exists, so "stopped" is no longer a safe default:
+        # only a positively parsed state may claim the session is stopped.
+        status["state"] = "unknown"
 
         # Parse the output
         playback_updated = None
         playback_speed = 0.0
+        owner_uid: Optional[int] = None
         lines = result.split('\n')
         for i, line in enumerate(lines):
             # Check if Stremio is active
             if "com.stremio.one" in line and "active=true" in result:
                 status["app"] = "Stremio"
+
+            if owner_uid is None:
+                uid_match = re.search(r"\bownerUid=(\d+)", line)
+                if uid_match:
+                    owner_uid = int(uid_match.group(1))
 
             # Get playback state
             if "state=PlaybackState" in line:
@@ -617,13 +710,27 @@ class StremioController:
                     status["state"] = "playing"
                 elif "state=2" in line or "state=PAUSED(2)" in line:
                     status["state"] = "paused"
+                elif "state=7" in line or "state=ERROR(7)" in line:
+                    status["playing"] = False
+                    status["state"] = "error"
+                elif "state=1" in line or "state=STOPPED(1)" in line:
+                    status["playing"] = False
+                    status["state"] = "stopped"
+                elif "state=0" in line or "state=NONE(0)" in line:
+                    status["playing"] = False
+                    status["state"] = "none"
+                else:
+                    # BUFFERING(6), CONNECTING(8), SKIPPING(9-11) and any
+                    # future state: not playing, but definitely not stopped.
+                    status["playing"] = False
+                    status["state"] = "unknown"
 
                 # Extract position (in milliseconds)
                 if "position=" in line:
                     try:
                         pos_str = line.split("position=")[1].split(",")[0]
                         status["position"] = int(pos_str)
-                    except:
+                    except Exception:
                         pass
 
                 updated_match = re.search(r"\bupdated=(\d+)", line)
@@ -639,7 +746,7 @@ class StremioController:
                 try:
                     desc = line.split("description=")[1].split(",")[0]
                     status["title"] = desc.strip()
-                except:
+                except Exception:
                     pass
             elif "metadata:" in line:
                 # Check next line for description
@@ -649,8 +756,34 @@ class StremioController:
                         try:
                             desc = next_line.split("description=")[1].split(",")[0]
                             status["title"] = desc.strip()
-                        except:
+                        except Exception:
                             pass
+
+        meta["owner_uid"] = owner_uid
+        meta["updated"] = playback_updated
+        meta["speed"] = playback_speed
+        return status, meta
+
+    async def get_playback_status(self) -> dict:
+        """Get current playback status from media session"""
+        status, meta = await self._read_session_status()
+        owner_uid = meta["owner_uid"]
+        playback_updated = meta["updated"]
+        playback_speed = meta["speed"]
+        status["dump_ok"] = meta["dump_ok"]
+
+        if not meta["session_found"]:
+            return status
+
+        # Stremio can leave PlaybackState=PLAYING after an Exo player failure
+        # while nothing is actually rendering. Corroborate claimed playing with
+        # a started AudioTrack for the session owner before treating it as live.
+        if status["playing"] and status["app"]:
+            audio_live = await self._stremio_audio_is_started(owner_uid)
+            if audio_live is False:
+                status["playing"] = False
+                status["state"] = "stalled"
+                # Keep the last raw position; do not extrapolate a fake clock.
 
         # PlaybackState positions are snapshots. Android clients extrapolate a
         # playing position from the monotonic update time and playback speed.
@@ -681,6 +814,44 @@ class StremioController:
             status["position"] = min(status["position"], status["duration"])
 
         return status
+
+    async def _stremio_audio_is_started(
+        self, owner_uid: Optional[int] = None
+    ) -> Optional[bool]:
+        """Whether Stremio currently has a started media AudioTrack.
+
+        Returns:
+            True  - a started track for the Stremio session owner was found
+            False - configs were readable and none are started for that owner
+            None  - audio dump unavailable (do not demote playback state)
+        """
+        audio = await self.send_shell_command("dumpsys audio")
+        if not audio:
+            return None
+
+        uid_token = f"u/pid:{owner_uid}/" if owner_uid is not None else None
+        saw_owner = False
+        for line in audio.splitlines():
+            if "AudioPlaybackConfiguration" not in line:
+                continue
+            if uid_token is not None:
+                if uid_token not in line:
+                    continue
+                saw_owner = True
+            elif "com.stremio.one" not in line:
+                # Config lines normally carry u/pid only; without a uid we
+                # cannot safely attribute tracks to Stremio.
+                continue
+            if "state:started" in line:
+                return True
+            if "state:paused" in line or "state:stopped" in line:
+                saw_owner = True
+
+        if owner_uid is not None:
+            # No started track for this uid: treat as not live (covers Exo-error
+            # sessions that never open an AudioTrack, and paused-only configs).
+            return False
+        return None if not saw_owner else False
 
     async def play_content(self, content_type: str, imdb_id: str,
                           season: Optional[int] = None,
@@ -1578,7 +1749,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="tv_control",
-            description="Control Android TV. volume: up/down/mute/set. playback: play/pause/toggle/stop/next/previous/forward/rewind. navigate: up/down/left/right/select/back/home. power: wake/sleep/toggle/status.",
+            description="Control Android TV. volume: up/down/mute/set. playback: play/pause/toggle/stop/next/previous/forward/rewind; stop succeeds only when playback is verified to have ended (no actively playing session), not merely when a key event is delivered. navigate: up/down/left/right/select/back/home. power: wake/sleep/toggle/status.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1600,7 +1771,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="playback_status",
-            description="Get current playback status. Returns app, title, state (playing/paused/stopped), position, and duration.",
+            description="Get current playback status. Returns app, title, state (playing/paused/stalled/stopped/none/error/unknown; stalled means the session claims playing but audio output is not live), position, and duration.",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -2008,11 +2179,16 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 if action not in actions_map:
                     return [TextContent(type="text", text=f"Unknown playback action: {action}")]
 
-                success = await actions_map[action]()
-                return [TextContent(
-                    type="text",
-                    text=f"Playback: {action}" if success else _adb_failure_text(controller),
-                )]
+                if action == "stop":
+                    success, stop_failure = await controller.stop_playback()
+                else:
+                    success, stop_failure = await actions_map[action](), None
+
+                if success:
+                    message = f"Playback: {action}"
+                else:
+                    message = stop_failure or _adb_failure_text(controller)
+                return [TextContent(type="text", text=message)]
 
             elif category == "navigate":
                 actions_map = {
@@ -2057,6 +2233,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 return [TextContent(type="text", text="Error: ANDROID_TV_HOST not configured.")]
 
             status = await controller.get_playback_status()
+
+            if not status.get("dump_ok"):
+                return [TextContent(type="text", text=_adb_failure_text(controller))]
 
             if not status["app"]:
                 return [TextContent(type="text", text="No active media session found")]

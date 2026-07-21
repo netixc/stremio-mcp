@@ -1755,14 +1755,33 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_playback_status_supports_named_android_state(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)
-        controller.send_shell_command = AsyncMock(
+        controller._run_shell = AsyncMock(
             return_value=(
-                "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
-                "  active=true\n"
-                "  state=PlaybackState {state=PLAYING(3), position=5796, "
-                "buffered position=12000, speed=1.0}\n"
-                "  metadata: size=4, description=Inception, null, null"
+                True,
+                (
+                    "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
+                    "  ownerPid=12273, ownerUid=10084, userId=0\n"
+                    "  package=com.stremio.one\n"
+                    "  active=true\n"
+                    "  state=PlaybackState {state=PLAYING(3), position=5796, "
+                    "buffered position=12000, speed=1.0}\n"
+                    "  metadata: size=4, description=Inception, null, null"
+                ),
             )
+        )
+        controller.send_shell_command = AsyncMock(
+            side_effect=[
+                # Live AudioTrack corroborates claimed PLAYING.
+                (
+                    "  players:\n"
+                    "  AudioPlaybackConfiguration piid:151 type:android.media.AudioTrack "
+                    "u/pid:10084/12273 state:started attr:AudioAttributes: usage=USAGE_MEDIA\n"
+                ),
+                (
+                    "Recent extractors, most recent first:\n"
+                    "track {mime: video/hevc, dura: (int64_t) 1000}"
+                ),
+            ]
         )
 
         status = await controller.get_playback_status()
@@ -1775,10 +1794,13 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_playback_status_estimates_position_and_extractor_duration(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)
-        controller.send_shell_command = AsyncMock(
-            side_effect=[
+        controller._run_shell = AsyncMock(
+            return_value=(
+                True,
                 (
                     "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
+                    "  ownerPid=12273, ownerUid=10084, userId=0\n"
+                    "  package=com.stremio.one\n"
                     "  active=true\n"
                     "  state=PlaybackState {state=PLAYING(3), position=5796, "
                     "buffered position=0, speed=1.0, updated=907375568}\n"
@@ -1787,6 +1809,14 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
                     "      active=true\n"
                     "      state=PlaybackState {state=ERROR(7), position=0, "
                     "buffered position=0, speed=0.0, updated=128501}"
+                ),
+            )
+        )
+        controller.send_shell_command = AsyncMock(
+            side_effect=[
+                (
+                    "  AudioPlaybackConfiguration piid:151 type:android.media.AudioTrack "
+                    "u/pid:10084/12273 state:started attr:AudioAttributes: usage=USAGE_MEDIA\n"
                 ),
                 "907573.69 2452711.11",
                 (
@@ -1800,6 +1830,303 @@ class NativeAdbControllerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status["position"], 203918)
         self.assertEqual(status["duration"], 8887891)
+        self.assertTrue(status["playing"])
+        self.assertEqual(status["state"], "playing")
+
+    async def test_playback_status_demotes_stale_playing_without_audio(self):
+        """Exo-error/stale path: session says PLAYING but no live AudioTrack."""
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller._run_shell = AsyncMock(
+            return_value=(
+                True,
+                (
+                    "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
+                    "  ownerPid=17104, ownerUid=10084, userId=0\n"
+                    "  package=com.stremio.one\n"
+                    "  active=true\n"
+                    "  state=PlaybackState {state=PLAYING(3), position=0, "
+                    "buffered position=0, speed=1.0, updated=90477645, "
+                    "actions=770, custom actions=[], active item id=-1, error=null}\n"
+                    "  metadata: size=4, description=Big Buck Bunny, null, null\n"
+                ),
+            )
+        )
+        controller.send_shell_command = AsyncMock(
+            side_effect=[
+                # No started track for Stremio uid — player error / stalled.
+                (
+                    "  players:\n"
+                    "  AudioPlaybackConfiguration piid:95 type:android.media.SoundPool "
+                    "u/pid:1000/775 state:idle attr:AudioAttributes: "
+                    "usage=USAGE_ASSISTANCE_SONIFICATION\n"
+                ),
+                (
+                    "Recent extractors, most recent first:\n"
+                    "track {mime: video/avc, dura: (int64_t) 634534000}"
+                ),
+            ]
+        )
+
+        status = await controller.get_playback_status()
+
+        self.assertFalse(status["playing"])
+        self.assertEqual(status["state"], "stalled")
+        self.assertEqual(status["app"], "Stremio")
+        self.assertEqual(status["title"], "Big Buck Bunny")
+        # Must not extrapolate a fake advancing clock from the stale snapshot.
+        self.assertEqual(status["position"], 0)
+        self.assertEqual(status["duration"], 634534)
+
+    async def test_playback_status_keeps_paused_without_started_audio(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller._run_shell = AsyncMock(
+            return_value=(
+                True,
+                (
+                    "PlayerMediaSession com.stremio.one/PlayerMediaSession\n"
+                    "  ownerPid=17104, ownerUid=10084, userId=0\n"
+                    "  package=com.stremio.one\n"
+                    "  active=true\n"
+                    "  state=PlaybackState {state=PAUSED(2), position=56000, "
+                    "buffered position=0, speed=1.0, updated=90530060}\n"
+                    "  metadata: size=4, description=Big Buck Bunny, null, null\n"
+                ),
+            )
+        )
+        controller.send_shell_command = AsyncMock(
+            side_effect=[
+                (
+                    "Recent extractors, most recent first:\n"
+                    "track {mime: video/avc, dura: (int64_t) 634534000}"
+                ),
+            ]
+        )
+
+        status = await controller.get_playback_status()
+
+        self.assertFalse(status["playing"])
+        self.assertEqual(status["state"], "paused")
+        self.assertEqual(status["position"], 56000)
+
+    async def test_media_stop_does_not_report_success_when_session_keeps_playing(self):
+        """Pre-fix KEYCODE_MEDIA_STOP success alone left VLC playing."""
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_shell = AsyncMock(return_value=(True, ""))
+        controller.send_key_event = AsyncMock(return_value=True)
+        controller.media_pause = AsyncMock(return_value=True)
+        controller.nav_back = AsyncMock(return_value=True)
+        # After every stop attempt the session still claims playing with live audio.
+        still_playing = {
+            "playing": True,
+            "app": "Stremio",
+            "title": "Big Buck Bunny",
+            "position": 66000,
+            "duration": 634000,
+            "state": "playing",
+        }
+        controller._read_session_status = AsyncMock(
+            return_value=(still_playing, {"dump_ok": True, "session_found": True})
+        )
+
+        with patch("stremio_mcp.asyncio.sleep", new_callable=AsyncMock):
+            stopped, reason = await controller.stop_playback()
+        self.assertFalse(stopped)
+        controller.send_key_event.assert_awaited()
+        controller._run_shell.assert_any_await("am force-stop com.stremio.one")
+        self.assertIn("still reports active playback", reason)
+
+    async def test_media_stop_succeeds_after_force_stop_clears_session(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_shell = AsyncMock(return_value=(True, ""))
+        controller.send_key_event = AsyncMock(return_value=True)
+        controller.media_pause = AsyncMock(return_value=True)
+        controller.nav_back = AsyncMock(return_value=True)
+
+        playing = {
+            "playing": True,
+            "app": "Stremio",
+            "title": "Big Buck Bunny",
+            "position": 66000,
+            "duration": 634000,
+            "state": "playing",
+        }
+        cleared = {
+            "playing": False,
+            "app": None,
+            "title": None,
+            "position": None,
+            "duration": None,
+            "state": "stopped",
+        }
+        # key stop → still playing; pause+back → still playing; force-stop → cleared
+        live = {"dump_ok": True, "session_found": True}
+        gone = {"dump_ok": True, "session_found": False}
+        controller._read_session_status = AsyncMock(
+            side_effect=[(playing, live), (playing, live), (cleared, gone)]
+        )
+
+        with patch("stremio_mcp.asyncio.sleep", new_callable=AsyncMock):
+            stopped, reason = await controller.stop_playback()
+        self.assertTrue(stopped)
+        controller._run_shell.assert_any_await("am force-stop com.stremio.one")
+        controller._run_shell.assert_any_await("cmd media_session dispatch stop")
+        self.assertIsNone(reason)
+
+    async def test_media_stop_fails_closed_on_buffering_session(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_shell = AsyncMock(return_value=(True, ""))
+        controller.send_key_event = AsyncMock(return_value=True)
+        controller.media_pause = AsyncMock(return_value=True)
+        controller.nav_back = AsyncMock(return_value=True)
+        # BUFFERING(6) matches no explicit branch: not playing, not stopped.
+        buffering = {
+            "playing": False,
+            "app": "Stremio",
+            "title": "Big Buck Bunny",
+            "position": 66000,
+            "duration": 634000,
+            "state": "unknown",
+        }
+        controller._read_session_status = AsyncMock(
+            return_value=(buffering, {"dump_ok": True, "session_found": True})
+        )
+
+        with patch("stremio_mcp.asyncio.sleep", new_callable=AsyncMock):
+            stopped, reason = await controller.stop_playback()
+        self.assertFalse(stopped)
+        self.assertIn("state=unknown", reason)
+
+    async def test_stop_fails_closed_when_the_verification_dump_fails(self):
+        """A dead ADB link must not read as \"no session, nothing to stop\"."""
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        controller._run_shell = AsyncMock(return_value=(False, ""))
+        controller.send_key_event = AsyncMock(return_value=False)
+        controller.media_pause = AsyncMock(return_value=False)
+        controller.nav_back = AsyncMock(return_value=False)
+
+        with patch("stremio_mcp.asyncio.sleep", new_callable=AsyncMock):
+            stopped, reason = await controller.stop_playback()
+
+        self.assertFalse(stopped)
+        # force-stop itself failed, so the ADB failure text is the truthful one.
+        self.assertIsNone(reason)
+
+    async def test_stop_reports_unverifiable_session_when_only_the_dump_fails(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+
+        async def fake_shell(command: str) -> tuple[bool, str]:
+            return command != "dumpsys media_session", ""
+
+        controller._run_shell = AsyncMock(side_effect=fake_shell)
+        controller.send_key_event = AsyncMock(return_value=True)
+        controller.media_pause = AsyncMock(return_value=True)
+        controller.nav_back = AsyncMock(return_value=True)
+
+        with patch("stremio_mcp.asyncio.sleep", new_callable=AsyncMock):
+            stopped, reason = await controller.stop_playback()
+
+        self.assertFalse(stopped)
+        self.assertIn("could not be read over ADB", reason)
+
+    async def test_playback_status_reports_a_failed_dump_as_an_adb_failure(self):
+        """An unreadable dump must not read as an authoritative empty session."""
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller.device = "10.0.0.8:37139"
+        controller._run_adb = AsyncMock(
+            return_value=(1, "", "error: device unauthorized at 10.0.0.8:37139")
+        )
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool("playback_status", {})
+
+        self.assertNotIn("No active media session found", response[0].text)
+        self.assertIn("category=unauthorized", response[0].text)
+        self.assertNotIn("10.0.0.8", response[0].text)
+
+    async def test_playback_status_still_reports_an_authoritative_empty_session(self):
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller.device = "10.0.0.8:37139"
+        controller._run_shell = AsyncMock(
+            return_value=(True, "Sessions Stack - have 0 sessions:\n")
+        )
+        controller.send_shell_command = AsyncMock(return_value="")
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool("playback_status", {})
+
+        self.assertEqual(response[0].text, "No active media session found")
+
+    async def test_buffering_session_is_not_reported_as_stopped(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        dump = (
+            "  Sessions Stack - have 1 sessions:\n"
+            "    PlayerMediaSession com.stremio.one/PlayerMediaSession (userId=0)\n"
+            "      ownerPid=12273, ownerUid=10084, userId=0\n"
+            "      package=com.stremio.one\n"
+            "      active=true\n"
+            "      state=PlaybackState {state=BUFFERING(6), position=5796, "
+            "buffered position=0, speed=0.0, updated=100000}\n"
+            "    OtherSession com.other.app/Session (userId=0)\n"
+            "      ownerPid=1, ownerUid=99999, userId=0\n"
+        )
+        controller._run_shell = AsyncMock(return_value=(True, dump))
+
+        status, meta = await controller._read_session_status()
+
+        self.assertEqual(status["state"], "unknown")
+        self.assertFalse(status["playing"])
+        self.assertEqual(meta["owner_uid"], 10084)
+        stopped, reason = await controller._is_playback_stopped()
+        self.assertFalse(stopped)
+        self.assertIn("state=unknown", reason)
+
+    async def test_stop_verification_avoids_extractor_and_uptime_dumps(self):
+        controller = stremio_mcp.StremioController("test.invalid", 37139)
+        controller.device = "test.invalid:37139"
+        commands: list[str] = []
+
+        async def fake_shell(command: str) -> tuple[bool, str]:
+            commands.append(command)
+            return True, ""
+
+        controller._run_shell = AsyncMock(side_effect=fake_shell)
+
+        stopped, reason = await controller._is_playback_stopped()
+        self.assertTrue(stopped)
+        self.assertEqual(reason, "")
+        self.assertEqual(commands, ["dumpsys media_session"])
+
+    async def test_stop_post_condition_failure_is_not_reported_as_adb_failure(self):
+        original_controller = stremio_mcp.controller
+        controller = stremio_mcp.StremioController("10.0.0.8", 37139)
+        controller.stop_playback = AsyncMock(
+            return_value=(
+                False,
+                "Stop failed: the Stremio media session still reports active "
+                "playback (state=playing) after media-session stop, pause and "
+                "back, and force-stop.",
+            )
+        )
+        stremio_mcp.controller = controller
+        self.addCleanup(setattr, stremio_mcp, "controller", original_controller)
+
+        response = await stremio_mcp.call_tool(
+            "tv_control", {"category": "playback", "action": "stop"}
+        )
+
+        self.assertIn("still reports active playback", response[0].text)
+        self.assertNotIn("ADB failure", response[0].text)
+        self.assertNotIn("10.0.0.8", response[0].text)
 
     async def test_send_intent_passes_uri_as_a_distinct_adb_argument(self):
         controller = stremio_mcp.StremioController("test.invalid", 37139)

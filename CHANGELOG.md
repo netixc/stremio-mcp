@@ -27,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A Stremio API-level error now also reports the server-generated numeric error code, so an expired or revoked auth key is diagnosable without echoing any part of the request.
 - Write verification compares only the state keys this module actually writes, so a server-side addition to an untouched field no longer reports a successful mutation as failed. Any intended key that is missing or different is still a failure.
 
+### Fixed
+
+- `tv_control` playback `stop` now reports success as a post-condition instead of as ADB accepting `KEYCODE_MEDIA_STOP`, which Stremio/VLC commonly ignores while still playing. The server tries a media-session stop, then pause plus back, then a bounded `am force-stop com.stremio.one`, verifies after each step, and fails closed with the reason when the session still reports active playback or its state cannot be read.
+- `playback_status` no longer reports healthy playback for a stale or Exo-error media session that still claims `PLAYING`. A claimed playing state must be corroborated by a started `AudioTrack` for the session owner; otherwise it is reported as `stalled` and the raw position is kept instead of being extrapolated. Parsing is confined to Stremio's own session block, previously unhandled states such as error, buffering, and connecting are no longer reported as `stopped`, and an unreadable ADB dump is reported as a device failure rather than as no playback.
+
 ### Removed
 
 - The `requests` dependency, replaced by `httpx` (already a transitive MCP dependency).

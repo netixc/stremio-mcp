@@ -31,6 +31,8 @@ Run commands from the repository root with Python 3.10+ and `uv` installed.
 - On macOS, Local Network permission applies to the `adb` binary. The supported pattern is for a permitted GUI terminal to start the shared ADB server, while MCP and other tools use it as localhost clients; automated tooling must not run `adb kill-server` or `adb start-server` or otherwise manage that server lifecycle.
 - A series deep link requires both season and episode; movies and series use different Stremio URI forms. Preserve this distinction and cover dispatch or URI changes with mocked tests.
 - Playback parsing must remain scoped to Stremio's media-session block because other Android sessions can overwrite state. Preserve support for numeric and named states, monotonic position extrapolation, and extractor-based duration fallback in mocked tests.
+- Claimed media-session `PLAYING` must be corroborated with a started Stremio-owner `AudioTrack` before reporting healthy playback; otherwise demote to `stalled` and do not extrapolate position. Stremio often freezes raw `position`/`updated` even during real play, so dual-sampling the session alone cannot prove liveness.
+- `media_stop` success is a post-condition (no active playback), not ADB accepting `KEYCODE_MEDIA_STOP`. Stremio/VLC commonly ignores STOP while accepting pause/play; keep the bounded verify → pause+back → `am force-stop com.stremio.one` path and fail closed if the session still plays.
 - `dist/`, `.venv/`, and Python cache files are generated outputs; do not edit them directly or include them in source changes.
 
 ## Authoritative references
