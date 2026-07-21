@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-22
+
 ### Added
 
 - A bounded raw TCP preflight now separates a masked `adb` denial from a real network failure. When `adb connect` reports the TV as unreachable or the network as ambiguous but one short probe of the configured endpoint connects — a single attempt, no bytes written, two-second cap — the failure is reported as `local_network_denied` with guidance to grant `adb` Local Network access on macOS or reuse an ADB server started from a permitted GUI terminal. A failed probe keeps the original diagnosis, because the probing process may itself be denied, and the probe never runs an ADB server lifecycle command.
@@ -58,4 +60,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Library mutations require an explicit IMDb ID and content type.
 - Credentials, device details, and ADB keys are excluded from version control and documented as sensitive.
 
+[0.2.0]: https://github.com/netixc/stremio-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/netixc/stremio-mcp/releases/tag/v0.1.0
