@@ -311,6 +311,8 @@ class StremioController:
         self.target = f"{host}:{port}"
         self.device: Optional[str] = None
         self.last_failure: Optional[AdbFailure] = None
+        self.last_stop_failure: Optional[str] = None
+        self._last_stop_state: Optional[str] = None
         self._connect_lock = asyncio.Lock()
         self._next_connect_attempt = 0.0
 
@@ -496,6 +498,8 @@ class StremioController:
         not by ADB accepting a key event. Bounded fallbacks: media-session
         dispatch, pause+back, then force-stop the Stremio package.
         """
+        self.last_stop_failure = None
+
         # 1) Preferred media-session stop path (dispatch + classic keyevent).
         await self._run_shell("cmd media_session dispatch stop")
         await self.send_key_event(86, delay=0)  # KEYCODE_MEDIA_STOP
@@ -515,11 +519,25 @@ class StremioController:
         if not stopped:
             return False
         await asyncio.sleep(0.45)
-        return await self._is_playback_stopped()
+        if await self._is_playback_stopped():
+            return True
+        self.last_stop_failure = (
+            "Stop failed: the Stremio media session still reports active "
+            f"playback (state={self._last_stop_state or 'unknown'}) after "
+            "media-session stop, pause and back, and force-stop."
+        )
+        return False
 
     async def _is_playback_stopped(self) -> bool:
-        """True when there is no Stremio active playback to stop."""
-        status = await self.get_playback_status()
+        """True when there is no Stremio active playback to stop.
+
+        Uses only the media-session dump: audio corroboration, uptime, and
+        extractor duration are irrelevant to the stop post-condition. Fails
+        closed on any state that was not positively parsed as stopped (for
+        example BUFFERING or CONNECTING).
+        """
+        status, _ = await self._read_session_status()
+        self._last_stop_state = status.get("state")
         if status.get("playing"):
             return False
         if not status.get("app"):
@@ -599,8 +617,12 @@ class StremioController:
             return "off"
         return "unknown"
 
-    async def get_playback_status(self) -> dict:
-        """Get current playback status from media session"""
+    async def _read_session_status(self) -> tuple[dict, dict]:
+        """Parse Stremio's media-session block from a single dumpsys call.
+
+        Returns the raw status plus the extrapolation inputs (owner uid,
+        update time, speed) needed by the fuller status path.
+        """
         result = await self.send_shell_command("dumpsys media_session")
 
         status = {
@@ -612,8 +634,15 @@ class StremioController:
             "state": "stopped"
         }
 
+        meta: dict = {
+            "owner_uid": None,
+            "updated": None,
+            "speed": 0.0,
+            "session_found": False,
+        }
+
         if not result:
-            return status
+            return status, meta
 
         # dumpsys includes every media session. Restrict parsing to Stremio's
         # block so inactive Bluetooth/Netflix positions cannot overwrite it.
@@ -635,7 +664,12 @@ class StremioController:
         else:
             # Without a Stremio session, do not let other apps' PlaybackState
             # lines paint a fake Stremio status.
-            return status
+            return status, meta
+
+        meta["session_found"] = True
+        # A Stremio session exists, so "stopped" is no longer a safe default:
+        # only a positively parsed state may claim the session is stopped.
+        status["state"] = "unknown"
 
         # Parse the output
         playback_updated = None
@@ -647,9 +681,10 @@ class StremioController:
             if "com.stremio.one" in line and "active=true" in result:
                 status["app"] = "Stremio"
 
-            uid_match = re.search(r"\bownerUid=(\d+)", line)
-            if uid_match:
-                owner_uid = int(uid_match.group(1))
+            if owner_uid is None:
+                uid_match = re.search(r"\bownerUid=(\d+)", line)
+                if uid_match:
+                    owner_uid = int(uid_match.group(1))
 
             # Get playback state
             if "state=PlaybackState" in line:
@@ -669,6 +704,11 @@ class StremioController:
                 elif "state=0" in line or "state=NONE(0)" in line:
                     status["playing"] = False
                     status["state"] = "none"
+                else:
+                    # BUFFERING(6), CONNECTING(8), SKIPPING(9-11) and any
+                    # future state: not playing, but definitely not stopped.
+                    status["playing"] = False
+                    status["state"] = "unknown"
 
                 # Extract position (in milliseconds)
                 if "position=" in line:
@@ -703,6 +743,21 @@ class StremioController:
                             status["title"] = desc.strip()
                         except Exception:
                             pass
+
+        meta["owner_uid"] = owner_uid
+        meta["updated"] = playback_updated
+        meta["speed"] = playback_speed
+        return status, meta
+
+    async def get_playback_status(self) -> dict:
+        """Get current playback status from media session"""
+        status, meta = await self._read_session_status()
+        owner_uid = meta["owner_uid"]
+        playback_updated = meta["updated"]
+        playback_speed = meta["speed"]
+
+        if not meta["session_found"]:
+            return status
 
         # Stremio can leave PlaybackState=PLAYING after an Exo player failure
         # while nothing is actually rendering. Corroborate claimed playing with
@@ -2109,10 +2164,16 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     return [TextContent(type="text", text=f"Unknown playback action: {action}")]
 
                 success = await actions_map[action]()
-                return [TextContent(
-                    type="text",
-                    text=f"Playback: {action}" if success else _adb_failure_text(controller),
-                )]
+                if success:
+                    message = f"Playback: {action}"
+                else:
+                    stop_failure = getattr(controller, "last_stop_failure", None)
+                    message = (
+                        stop_failure
+                        if action == "stop" and stop_failure
+                        else _adb_failure_text(controller)
+                    )
+                return [TextContent(type="text", text=message)]
 
             elif category == "navigate":
                 actions_map = {
