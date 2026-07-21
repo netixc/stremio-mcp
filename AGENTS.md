@@ -33,6 +33,7 @@ Run commands from the repository root with Python 3.10+ and `uv` installed.
 - Playback parsing must remain scoped to Stremio's media-session block because other Android sessions can overwrite state. Preserve support for numeric and named states, monotonic position extrapolation, and extractor-based duration fallback in mocked tests.
 - Claimed media-session `PLAYING` must be corroborated with a started Stremio-owner `AudioTrack` before reporting healthy playback; otherwise demote to `stalled` and do not extrapolate position. Stremio often freezes raw `position`/`updated` even during real play, so dual-sampling the session alone cannot prove liveness.
 - `media_stop` success is a post-condition (no active playback), not ADB accepting `KEYCODE_MEDIA_STOP`. Stremio/VLC commonly ignores STOP while accepting pause/play; keep the bounded verify → pause+back → `am force-stop com.stremio.one` path and fail closed if the session still plays.
+- Live TV dogfood: after starting a stream, wait for buffering/settle before treating `playback_status` or pause/resume/stop samples as authoritative (early samples often look stalled/unknown at position 0). Never press select/enter on the launcher — that can open an unrelated app; only center while `com.stremio.one` is focused.
 - `dist/`, `.venv/`, and Python cache files are generated outputs; do not edit them directly or include them in source changes.
 
 ## Authoritative references
