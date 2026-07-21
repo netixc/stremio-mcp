@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `ANDROID_TV_PORT` is now read through the same bounded integer configuration helper as other numeric settings. Empty, quoted, nonnumeric, and out-of-range values no longer crash module import; they fall back to the default `5555` and report only the variable name, never the raw value.
 - `tv_control` playback `stop` now reports success as a post-condition instead of as ADB accepting `KEYCODE_MEDIA_STOP`, which Stremio/VLC commonly ignores while still playing. The server tries a media-session stop, then pause plus back, then a bounded `am force-stop com.stremio.one`, verifies after each step, and fails closed with the reason when the session still reports active playback or its state cannot be read.
 - `playback_status` no longer reports healthy playback for a stale or Exo-error media session that still claims `PLAYING`. A claimed playing state must be corroborated by a started `AudioTrack` for the session owner; otherwise it is reported as `stalled` and the raw position is kept instead of being extrapolated. Parsing is confined to Stremio's own session block, previously unhandled states such as error, buffering, and connecting are no longer reported as `stopped`, and an unreadable ADB dump is reported as a device failure rather than as no playback.
 
