@@ -489,8 +489,42 @@ class StremioController:
         return await self.send_key_event(127, delay=0)  # KEYCODE_MEDIA_PAUSE
 
     async def media_stop(self) -> bool:
-        """Stop media"""
-        return await self.send_key_event(86, delay=0)  # KEYCODE_MEDIA_STOP
+        """Stop media and verify the Stremio session is no longer playing.
+
+        Stremio/VLC often ignores KEYCODE_MEDIA_STOP while still accepting
+        pause/play. Success is defined by post-condition (no active playback),
+        not by ADB accepting a key event. Bounded fallbacks: media-session
+        dispatch, pause+back, then force-stop the Stremio package.
+        """
+        # 1) Preferred media-session stop path (dispatch + classic keyevent).
+        await self._run_shell("cmd media_session dispatch stop")
+        await self.send_key_event(86, delay=0)  # KEYCODE_MEDIA_STOP
+        await asyncio.sleep(0.45)
+        if await self._is_playback_stopped():
+            return True
+
+        # 2) Pause is known to work and stops advancement; leave the player UI.
+        await self.media_pause()
+        await self.nav_back()
+        await asyncio.sleep(0.35)
+        if await self._is_playback_stopped():
+            return True
+
+        # 3) Last bounded fallback: end Stremio so media cannot keep playing.
+        stopped, _ = await self._run_shell("am force-stop com.stremio.one")
+        if not stopped:
+            return False
+        await asyncio.sleep(0.45)
+        return await self._is_playback_stopped()
+
+    async def _is_playback_stopped(self) -> bool:
+        """True when there is no Stremio active playback to stop."""
+        status = await self.get_playback_status()
+        if status.get("playing"):
+            return False
+        if not status.get("app"):
+            return True
+        return status.get("state") in ("stopped", "none")
 
     async def media_next(self) -> bool:
         """Skip to next"""
@@ -598,15 +632,24 @@ class StremioController:
                     :first_line_end + next_header.start()
                 ]
             result = session_result
+        else:
+            # Without a Stremio session, do not let other apps' PlaybackState
+            # lines paint a fake Stremio status.
+            return status
 
         # Parse the output
         playback_updated = None
         playback_speed = 0.0
+        owner_uid: Optional[int] = None
         lines = result.split('\n')
         for i, line in enumerate(lines):
             # Check if Stremio is active
             if "com.stremio.one" in line and "active=true" in result:
                 status["app"] = "Stremio"
+
+            uid_match = re.search(r"\bownerUid=(\d+)", line)
+            if uid_match:
+                owner_uid = int(uid_match.group(1))
 
             # Get playback state
             if "state=PlaybackState" in line:
@@ -617,13 +660,22 @@ class StremioController:
                     status["state"] = "playing"
                 elif "state=2" in line or "state=PAUSED(2)" in line:
                     status["state"] = "paused"
+                elif "state=7" in line or "state=ERROR(7)" in line:
+                    status["playing"] = False
+                    status["state"] = "error"
+                elif "state=1" in line or "state=STOPPED(1)" in line:
+                    status["playing"] = False
+                    status["state"] = "stopped"
+                elif "state=0" in line or "state=NONE(0)" in line:
+                    status["playing"] = False
+                    status["state"] = "none"
 
                 # Extract position (in milliseconds)
                 if "position=" in line:
                     try:
                         pos_str = line.split("position=")[1].split(",")[0]
                         status["position"] = int(pos_str)
-                    except:
+                    except Exception:
                         pass
 
                 updated_match = re.search(r"\bupdated=(\d+)", line)
@@ -639,7 +691,7 @@ class StremioController:
                 try:
                     desc = line.split("description=")[1].split(",")[0]
                     status["title"] = desc.strip()
-                except:
+                except Exception:
                     pass
             elif "metadata:" in line:
                 # Check next line for description
@@ -649,8 +701,18 @@ class StremioController:
                         try:
                             desc = next_line.split("description=")[1].split(",")[0]
                             status["title"] = desc.strip()
-                        except:
+                        except Exception:
                             pass
+
+        # Stremio can leave PlaybackState=PLAYING after an Exo player failure
+        # while nothing is actually rendering. Corroborate claimed playing with
+        # a started AudioTrack for the session owner before treating it as live.
+        if status["playing"] and status["app"]:
+            audio_live = await self._stremio_audio_is_started(owner_uid)
+            if audio_live is False:
+                status["playing"] = False
+                status["state"] = "stalled"
+                # Keep the last raw position; do not extrapolate a fake clock.
 
         # PlaybackState positions are snapshots. Android clients extrapolate a
         # playing position from the monotonic update time and playback speed.
@@ -681,6 +743,44 @@ class StremioController:
             status["position"] = min(status["position"], status["duration"])
 
         return status
+
+    async def _stremio_audio_is_started(
+        self, owner_uid: Optional[int] = None
+    ) -> Optional[bool]:
+        """Whether Stremio currently has a started media AudioTrack.
+
+        Returns:
+            True  - a started track for the Stremio session owner was found
+            False - configs were readable and none are started for that owner
+            None  - audio dump unavailable (do not demote playback state)
+        """
+        audio = await self.send_shell_command("dumpsys audio")
+        if not audio:
+            return None
+
+        uid_token = f"u/pid:{owner_uid}/" if owner_uid is not None else None
+        saw_owner = False
+        for line in audio.splitlines():
+            if "AudioPlaybackConfiguration" not in line:
+                continue
+            if uid_token is not None:
+                if uid_token not in line:
+                    continue
+                saw_owner = True
+            elif "com.stremio.one" not in line:
+                # Config lines normally carry u/pid only; without a uid we
+                # cannot safely attribute tracks to Stremio.
+                continue
+            if "state:started" in line:
+                return True
+            if "state:paused" in line or "state:stopped" in line:
+                saw_owner = True
+
+        if owner_uid is not None:
+            # No started track for this uid: treat as not live (covers Exo-error
+            # sessions that never open an AudioTrack, and paused-only configs).
+            return False
+        return None if not saw_owner else False
 
     async def play_content(self, content_type: str, imdb_id: str,
                           season: Optional[int] = None,

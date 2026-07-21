@@ -177,7 +177,7 @@ Every HTTP request uses one shared async client with explicit timeouts, a bounde
 | `play` | Open a movie or specific episode by title or IMDb ID | May query TMDB/Stremio, opens Stremio, and sends a center key press |
 | `library` | List, continue, search, check, add, or remove items | Contacts Stremio; `add` and `remove` mutate the account |
 | `tv_control` | Volume, playback, navigation, and power controls | Sends commands to the physical Android TV |
-| `playback_status` | Read current Stremio playback diagnostics | Reads Android media-session and extractor diagnostics |
+| `playback_status` | Read current Stremio playback diagnostics | Reads Android media-session, audio-track liveness, and extractor diagnostics |
 
 Library mutations require an explicit IMDb ID and content type. Search first when a title is ambiguous; title-based `play` otherwise uses the first matching result. Series playback requires both a season and an episode.
 
@@ -264,7 +264,9 @@ Movie:  stremio:///detail/movie/{imdb_id}/{imdb_id}
 Series: stremio:///detail/series/{imdb_id}/{imdb_id}:{season}:{episode}
 ```
 
-Playback status is scoped to Stremio's media-session block. Position is estimated from Android's monotonic playback clock, and duration may fall back to media-extractor diagnostics.
+Playback status is scoped to Stremio's media-session block. Claimed `playing` is corroborated with a started media `AudioTrack` for the session owner so Exo-player error / stale sessions are reported as `stalled` instead of healthy playback. Position is estimated from Android's monotonic playback clock only while playback is live, and duration may fall back to media-extractor diagnostics.
+
+Playback `stop` verifies post-conditions (no active Stremio playback). When media-session stop is ignored, the server tries pause+back and, if needed, a bounded `am force-stop com.stremio.one` fallback, and reports failure if the session still plays.
 
 ## Development
 
