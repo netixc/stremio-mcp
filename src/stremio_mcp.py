@@ -311,8 +311,6 @@ class StremioController:
         self.target = f"{host}:{port}"
         self.device: Optional[str] = None
         self.last_failure: Optional[AdbFailure] = None
-        self.last_stop_failure: Optional[str] = None
-        self._last_stop_state: Optional[str] = None
         self._connect_lock = asyncio.Lock()
         self._next_connect_attempt = 0.0
 
@@ -491,58 +489,74 @@ class StremioController:
         return await self.send_key_event(127, delay=0)  # KEYCODE_MEDIA_PAUSE
 
     async def media_stop(self) -> bool:
-        """Stop media and verify the Stremio session is no longer playing.
+        """Stop media and verify the Stremio session is no longer playing."""
+        stopped, _ = await self.stop_playback()
+        return stopped
+
+    async def stop_playback(self) -> tuple[bool, Optional[str]]:
+        """Stop media and report the post-condition outcome for this call.
 
         Stremio/VLC often ignores KEYCODE_MEDIA_STOP while still accepting
         pause/play. Success is defined by post-condition (no active playback),
         not by ADB accepting a key event. Bounded fallbacks: media-session
         dispatch, pause+back, then force-stop the Stremio package.
-        """
-        self.last_stop_failure = None
 
+        Returns (stopped, reason). ``reason`` is None when the failure is an
+        ADB failure the caller should describe from ``last_failure``.
+        """
         # 1) Preferred media-session stop path (dispatch + classic keyevent).
         await self._run_shell("cmd media_session dispatch stop")
         await self.send_key_event(86, delay=0)  # KEYCODE_MEDIA_STOP
         await asyncio.sleep(0.45)
-        if await self._is_playback_stopped():
-            return True
+        stopped, reason = await self._is_playback_stopped()
+        if stopped:
+            return True, None
 
         # 2) Pause is known to work and stops advancement; leave the player UI.
         await self.media_pause()
         await self.nav_back()
         await asyncio.sleep(0.35)
-        if await self._is_playback_stopped():
-            return True
+        stopped, reason = await self._is_playback_stopped()
+        if stopped:
+            return True, None
 
         # 3) Last bounded fallback: end Stremio so media cannot keep playing.
-        stopped, _ = await self._run_shell("am force-stop com.stremio.one")
-        if not stopped:
-            return False
+        forced, _ = await self._run_shell("am force-stop com.stremio.one")
+        if not forced:
+            return False, None
         await asyncio.sleep(0.45)
-        if await self._is_playback_stopped():
-            return True
-        self.last_stop_failure = (
-            "Stop failed: the Stremio media session still reports active "
-            f"playback (state={self._last_stop_state or 'unknown'}) after "
-            "media-session stop, pause and back, and force-stop."
+        stopped, reason = await self._is_playback_stopped()
+        if stopped:
+            return True, None
+        return False, (
+            f"Stop failed: {reason} after media-session stop, pause and back, "
+            "and force-stop."
         )
-        return False
 
-    async def _is_playback_stopped(self) -> bool:
-        """True when there is no Stremio active playback to stop.
+    async def _is_playback_stopped(self) -> tuple[bool, str]:
+        """Whether there is no Stremio active playback left to stop.
 
         Uses only the media-session dump: audio corroboration, uptime, and
         extractor duration are irrelevant to the stop post-condition. Fails
-        closed on any state that was not positively parsed as stopped (for
-        example BUFFERING or CONNECTING).
+        closed when the dump cannot be read and on any state that was not
+        positively parsed as stopped (for example BUFFERING or CONNECTING).
         """
-        status, _ = await self._read_session_status()
-        self._last_stop_state = status.get("state")
+        status, meta = await self._read_session_status()
+        if not meta.get("dump_ok"):
+            return False, "the media session state could not be read over ADB"
         if status.get("playing"):
-            return False
-        if not status.get("app"):
-            return True
-        return status.get("state") in ("stopped", "none")
+            return False, (
+                "the Stremio media session still reports active playback "
+                f"(state={status.get('state')})"
+            )
+        if not meta.get("session_found") or not status.get("app"):
+            return True, ""
+        state = status.get("state")
+        if state in ("stopped", "none"):
+            return True, ""
+        return False, (
+            f"the Stremio media session is not stopped (state={state})"
+        )
 
     async def media_next(self) -> bool:
         """Skip to next"""
@@ -623,7 +637,7 @@ class StremioController:
         Returns the raw status plus the extrapolation inputs (owner uid,
         update time, speed) needed by the fuller status path.
         """
-        result = await self.send_shell_command("dumpsys media_session")
+        dump_ok, result = await self._run_shell("dumpsys media_session")
 
         status = {
             "playing": False,
@@ -639,6 +653,7 @@ class StremioController:
             "updated": None,
             "speed": 0.0,
             "session_found": False,
+            "dump_ok": dump_ok,
         }
 
         if not result:
@@ -2163,16 +2178,15 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 if action not in actions_map:
                     return [TextContent(type="text", text=f"Unknown playback action: {action}")]
 
-                success = await actions_map[action]()
+                if action == "stop":
+                    success, stop_failure = await controller.stop_playback()
+                else:
+                    success, stop_failure = await actions_map[action](), None
+
                 if success:
                     message = f"Playback: {action}"
                 else:
-                    stop_failure = getattr(controller, "last_stop_failure", None)
-                    message = (
-                        stop_failure
-                        if action == "stop" and stop_failure
-                        else _adb_failure_text(controller)
-                    )
+                    message = stop_failure or _adb_failure_text(controller)
                 return [TextContent(type="text", text=message)]
 
             elif category == "navigate":
