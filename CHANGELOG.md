@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A root `glama.json` claims the Glama directory listing for maintainer `netixc`.
+- The README carries an official MCP Registry badge and an availability table naming the four canonical surfaces — the GitHub repository, the `stremio-mcp-server` PyPI project, the `io.github.netixc/stremio-mcp` registry entry, and the current release tag.
+- The README states that this project is published on PyPI as `stremio-mcp-server` and that the separate `stremio-mcp` project is unrelated, so the `stremio-mcp` console script is not mistaken for a different distribution.
+
+### Changed
+
+- `pyproject.toml` keywords now include `mcp-server`, `model-context-protocol`, `media-center`, and `tmdb` for PyPI search. Package identity and version are unchanged.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added

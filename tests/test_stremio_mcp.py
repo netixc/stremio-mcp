@@ -937,6 +937,40 @@ class ReleaseMetadataTests(unittest.TestCase):
             (root / "README.md").read_text(),
         )
 
+    def test_glama_claim_file_names_the_repository_maintainer(self):
+        """Keep the minimal Glama ownership claim tied to this repository.
+
+        Glama documents the schema URL plus the maintainer's GitHub username;
+        a typo silently leaves the directory listing unclaimed rather than
+        failing loudly.
+        """
+        root = Path(__file__).resolve().parents[1]
+        claim = json.loads((root / "glama.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(claim["$schema"], "https://glama.ai/mcp/schemas/server.json")
+        self.assertEqual(claim["maintainers"], ["netixc"])
+
+    def test_readme_availability_links_track_the_released_version(self):
+        """Stop the README availability table from outliving the release.
+
+        The current-release row is the only version-bearing discovery link in
+        the README, so it must move with ``server.json`` like the pinned install
+        example already does.
+        """
+        root = Path(__file__).resolve().parents[1]
+        version = json.loads((root / "server.json").read_text())["version"]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn(
+            f"https://github.com/netixc/stremio-mcp/releases/tag/v{version}", readme
+        )
+        self.assertIn("https://pypi.org/project/stremio-mcp-server/", readme)
+        self.assertIn(
+            "https://registry.modelcontextprotocol.io/v0.1/servers/"
+            "io.github.netixc%2Fstremio-mcp/versions/latest",
+            readme,
+        )
+
     def test_mcp_dependency_stays_on_stable_v1(self):
         """Pin the official SDK to v1 until a deliberate v2 migration.
 
