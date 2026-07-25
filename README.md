@@ -8,6 +8,7 @@
 
 [![CI](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/stremio-mcp-server.svg)](https://pypi.org/project/stremio-mcp-server/)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.netixc%2Fstremio--mcp-0a7ea4.svg)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.netixc%2Fstremio-mcp/versions/latest)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://github.com/netixc/stremio-mcp/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/netixc/stremio-mcp/blob/main/LICENSE)
 
@@ -49,6 +50,12 @@ To run the current release explicitly:
 ```bash
 uvx --from stremio-mcp-server==0.2.0 stremio-mcp-server
 ```
+
+> [!NOTE]
+> This project is published on PyPI as **`stremio-mcp-server`**. A separate,
+> unrelated project is published as `stremio-mcp`; installing that name does not
+> install this server. The `stremio-mcp` console script below is provided by the
+> `stremio-mcp-server` distribution.
 
 ### Source checkout
 
@@ -285,6 +292,17 @@ uv build
 See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTING.md) for the contribution workflow, [CHANGELOG.md](https://github.com/netixc/stremio-mcp/blob/main/CHANGELOG.md) for release notes, and [SECURITY.md](https://github.com/netixc/stremio-mcp/blob/main/SECURITY.md) for vulnerability reporting and credential-redaction guidance.
 
 `server.json` is the metadata published to the [official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.netixc%2Fstremio-mcp) for `io.github.netixc/stremio-mcp`.
+
+## Availability
+
+Canonical sources for this server. Anything published elsewhere is not maintained here.
+
+| Surface | Identity | Link |
+| --- | --- | --- |
+| Source repository | `netixc/stremio-mcp` | https://github.com/netixc/stremio-mcp |
+| Python package | `stremio-mcp-server` | https://pypi.org/project/stremio-mcp-server/ |
+| Official MCP Registry | `io.github.netixc/stremio-mcp` | https://registry.modelcontextprotocol.io/v0.1/servers/io.github.netixc%2Fstremio-mcp/versions/latest |
+| Current release | `v0.2.0` | https://github.com/netixc/stremio-mcp/releases/tag/v0.2.0 |
 
 ## Security
 

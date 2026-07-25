@@ -9,7 +9,17 @@ description = "MCP server for controlling Stremio on Android TV via ADB"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-keywords = ["mcp", "stremio", "android-tv", "adb", "remote-control"]
+keywords = [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "stremio",
+    "android-tv",
+    "adb",
+    "remote-control",
+    "media-center",
+    "tmdb",
+]
 authors = [
     { name = "netixc" }
 ]
