@@ -938,11 +938,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
 
     def test_glama_claim_file_names_the_repository_maintainer(self):
-        """Keep the Glama ownership claim valid against its published schema.
+        """Keep the minimal Glama ownership claim tied to this repository.
 
-        Glama only honours a root ``glama.json`` that carries its schema URL and
-        the maintainer's GitHub username; a typo silently leaves the directory
-        listing unclaimed rather than failing loudly.
+        Glama documents the schema URL plus the maintainer's GitHub username;
+        a typo silently leaves the directory listing unclaimed rather than
+        failing loudly.
         """
         root = Path(__file__).resolve().parents[1]
         claim = json.loads((root / "glama.json").read_text(encoding="utf-8"))

@@ -291,7 +291,8 @@ uv build
 
 See [CONTRIBUTING.md](https://github.com/netixc/stremio-mcp/blob/main/CONTRIBUTING.md) for the contribution workflow, [CHANGELOG.md](https://github.com/netixc/stremio-mcp/blob/main/CHANGELOG.md) for release notes, and [SECURITY.md](https://github.com/netixc/stremio-mcp/blob/main/SECURITY.md) for vulnerability reporting and credential-redaction guidance.
 
-`server.json` is the metadata published to the [official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.netixc%2Fstremio-mcp) for `io.github.netixc/stremio-mcp`.
+`server.json` is the metadata published to the official MCP Registry. The
+canonical entry is linked in [Availability](#availability).
 
 ## Availability
 
