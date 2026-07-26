@@ -9,6 +9,7 @@
 [![CI](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/netixc/stremio-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/stremio-mcp-server.svg)](https://pypi.org/project/stremio-mcp-server/)
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.netixc%2Fstremio--mcp-0a7ea4.svg)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.netixc%2Fstremio-mcp/versions/latest)
+[![stremio-mcp MCP server](https://glama.ai/mcp/servers/netixc/stremio-mcp/badges/score.svg)](https://glama.ai/mcp/servers/netixc/stremio-mcp)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://github.com/netixc/stremio-mcp/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/netixc/stremio-mcp/blob/main/LICENSE)
 
