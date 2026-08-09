@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 import httpx
+from jsonschema import Draft202012Validator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -1070,6 +1071,129 @@ class McpSdkIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(is_error)
         self.assertTrue(result.content[0].text.startswith("Input validation error:"))
         dispatcher.assert_not_awaited()
+
+
+class ToolDefinitionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tools = {tool.name: tool for tool in await stremio_mcp.list_tools()}
+
+    def schema(self, name):
+        schema = self.tools[name].inputSchema
+        Draft202012Validator.check_schema(schema)
+        return schema
+
+    def test_each_tool_exposes_selection_guidance_and_effect_annotations(self):
+        expected_phrases = {
+            "search": (
+                "read-only", "library", "TMDB_API_KEY", "partial-results", "N/A"
+            ),
+            "play": (
+                "ANDROID_TV_HOST", "source=library", "DPAD_CENTER",
+                "does not verify", "playback_status"
+            ),
+            "library": (
+                "read-only", "STREMIO_AUTH_KEY", "soft delete", "read-back",
+                "fails closed"
+            ),
+            "tv_control": (
+                "native ADB", "volume", "force-stop", "select", "unknown"
+            ),
+            "playback_status": (
+                "read-only", "com.stremio.one", "stalled", "ADB error",
+                "no arguments"
+            ),
+        }
+        for name, phrases in expected_phrases.items():
+            with self.subTest(name=name):
+                description = self.tools[name].description.lower()
+                for phrase in phrases:
+                    self.assertIn(phrase.lower(), description)
+
+        self.assertTrue(self.tools["search"].annotations.readOnlyHint)
+        self.assertFalse(self.tools["play"].annotations.readOnlyHint)
+        self.assertTrue(self.tools["playback_status"].annotations.readOnlyHint)
+        self.assertFalse(self.tools["library"].annotations.readOnlyHint)
+        self.assertTrue(self.tools["library"].annotations.destructiveHint)
+        self.assertFalse(self.tools["tv_control"].annotations.readOnlyHint)
+
+    def test_search_schema_keeps_required_query_and_categories(self):
+        schema = self.schema("search")
+        self.assertEqual(schema["required"], ["query"])
+        self.assertEqual(
+            schema["properties"]["type"]["enum"], ["movie", "tv", "auto"]
+        )
+
+    def test_play_schema_requires_one_target_and_related_episode_numbers(self):
+        validator = Draft202012Validator(self.schema("play"))
+        valid = (
+            {"imdb_id": "tt0111161"},
+            {"imdb_id": "tt0903747", "season": 1, "episode": 2},
+            {"query": "Inception", "type": "movie"},
+            {"query": "Breaking Bad", "type": "tv", "season": 1, "episode": 1},
+            {"query": "Breaking Bad", "type": "tv", "source": "library"},
+        )
+        invalid = (
+            {"query": "Inception"},
+            {"query": "Inception", "type": "movie", "imdb_id": "tt0111161"},
+            {"imdb_id": "tt0903747", "season": 1},
+            {"query": "Breaking Bad", "type": "tv"},
+        )
+        for arguments in valid:
+            with self.subTest(valid=arguments):
+                self.assertFalse(list(validator.iter_errors(arguments)))
+        for arguments in invalid:
+            with self.subTest(invalid=arguments):
+                self.assertTrue(list(validator.iter_errors(arguments)))
+
+    def test_library_schema_makes_action_specific_inputs_explicit(self):
+        validator = Draft202012Validator(self.schema("library"))
+        valid = (
+            {"action": "list"},
+            {"action": "continue"},
+            {"action": "search", "query": "Dune"},
+            {"action": "check", "imdb_id": "tt1375666"},
+            {"action": "add", "type": "movie", "imdb_id": "tt1375666"},
+            {"action": "remove", "type": "tv", "imdb_id": "tt0903747"},
+        )
+        invalid = (
+            {"action": "search"},
+            {"action": "check"},
+            {"action": "add", "query": "Inception"},
+            {"action": "remove", "type": "series"},
+        )
+        for arguments in valid:
+            with self.subTest(valid=arguments):
+                self.assertFalse(list(validator.iter_errors(arguments)))
+        for arguments in invalid:
+            with self.subTest(invalid=arguments):
+                self.assertTrue(list(validator.iter_errors(arguments)))
+
+    def test_tv_control_schema_matches_category_actions_and_volume_value(self):
+        validator = Draft202012Validator(self.schema("tv_control"))
+        valid = (
+            {"category": "volume", "action": "up"},
+            {"category": "volume", "action": "set", "value": 8},
+            {"category": "playback", "action": "stop"},
+            {"category": "navigate", "action": "select"},
+            {"category": "power", "action": "status"},
+        )
+        invalid = (
+            {"category": "volume", "action": "set"},
+            {"category": "volume", "action": "set", "value": 16},
+            {"category": "navigate", "action": "set", "value": 8},
+            {"category": "power", "action": "status", "value": 8},
+        )
+        for arguments in valid:
+            with self.subTest(valid=arguments):
+                self.assertFalse(list(validator.iter_errors(arguments)))
+        for arguments in invalid:
+            with self.subTest(invalid=arguments):
+                self.assertTrue(list(validator.iter_errors(arguments)))
+
+    def test_playback_status_schema_rejects_inputs(self):
+        validator = Draft202012Validator(self.schema("playback_status"))
+        self.assertFalse(list(validator.iter_errors({})))
+        self.assertTrue(list(validator.iter_errors({"unexpected": True})))
 
 
 class LibraryReadOutcomeTests(unittest.IsolatedAsyncioTestCase):

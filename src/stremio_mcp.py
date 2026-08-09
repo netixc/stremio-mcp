@@ -25,6 +25,7 @@ from mcp.types import (
     PaginatedRequestParams,
     TextContent,
     Tool,
+    ToolAnnotations,
 )
 
 logger = logging.getLogger("stremio-mcp")
@@ -1697,27 +1698,57 @@ async def shutdown():
 
 
 async def list_tools() -> list[Tool]:
-    """List available tools"""
+    """List the five public tools and their agent-facing usage contracts."""
     return [
         Tool(
             name="search",
-            description="Search for movies or TV shows. Returns results with IMDb IDs.",
+            title="Search TMDB titles",
+            description=(
+                "Read-only TMDB title lookup. Use this to discover a movie or TV "
+                "show, disambiguate a title or year, or obtain an IMDb ID before "
+                "calling `play` or a library mutation. Do not use it to search the "
+                "user's Stremio library (use `library` with action=`search`), inspect "
+                "playback (`playback_status`), or control the TV (`tv_control`). "
+                "Requires `TMDB_API_KEY`; it does not require an Android TV or "
+                "`STREMIO_AUTH_KEY`. `query` is required. `type` selects `movie`, "
+                "`tv`, or `auto` (the default, which searches both); `year` is an "
+                "optional release/first-air year filter. The result is plain text "
+                "with at most five TMDB results per requested category, each with "
+                "a title, year, IMDb ID when TMDB provides one (otherwise `N/A`), "
+                "and a truncated overview. This tool contacts TMDB but never starts "
+                "playback or changes the TV or an account. `auto` may return a "
+                "partial-results note if only one category succeeds; if all "
+                "requested upstream searches fail it returns an error, while a "
+                "successful empty search says that no results were found."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Title to search for"
+                        "description": "Required title or search text sent to TMDB."
                     },
                     "type": {
                         "type": "string",
                         "enum": ["movie", "tv", "auto"],
-                        "description": "movie, tv, or auto (searches both)",
+                        "description": (
+                            "Search category: `movie`, `tv`, or `auto`. `auto` "
+                            "searches both categories and is the default."
+                        ),
                         "default": "auto"
                     },
                     "year": {
                         "type": "integer",
-                        "description": "Optional year filter"
+                        "description": (
+                            "Optional release year for movies or first-air year "
+                            "for TV shows."
+                        )
                     }
                 },
                 "required": ["query"]
@@ -1725,52 +1756,173 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="play",
-            description="Play movies or TV episodes. Use 'query' to search by title, or 'imdb_id' to play directly.",
+            title="Open content in Stremio",
+            description=(
+                "Open a movie or a specific series episode in Stremio on the "
+                "configured Android TV. Use this to start content; use `search` "
+                "only for discovery, `tv_control` for remote commands, and "
+                "`playback_status` to inspect the result. It requires "
+                "`ANDROID_TV_HOST` and an authorized, reachable native ADB "
+                "connection. Supply either an `imdb_id` for direct playback or a "
+                "title `query` plus `type`. With an IMDb ID, omit `season` and "
+                "`episode` for a movie or provide both for a series; `source`, "
+                "`query`, `type`, and `year` do not select the target on that "
+                "direct path. With a query, the default `source=search` uses the "
+                "first TMDB match (and needs `TMDB_API_KEY`); `year` applies only "
+                "there. `source=library` uses the first case-insensitive substring "
+                "match in the Stremio library and needs `STREMIO_AUTH_KEY`. "
+                "Title-based TV lookup with `source=search` requires both season "
+                "and episode. For a "
+                "library series, a valid saved video ID takes precedence over the "
+                "requested episode; without one, supplied numbers are used and "
+                "otherwise default to S1E1. The server sends a Stremio deep-link "
+                "intent and, after Android accepts it, waits and attempts one "
+                "DPAD_CENTER press. It does not verify focus, that key press, an "
+                "addon source, buffering, or actual playback, so `Now playing` "
+                "means only that the intent was accepted. It returns plain text "
+                "success, no-match, configuration, library, or safe ADB failure "
+                "messages. Opening content changes what is shown on the physical "
+                "TV but does not change the Stremio library."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Title to search and play"
+                        "description": (
+                            "Title to resolve and play. Use with `type`; do not "
+                            "combine it with `imdb_id`."
+                        )
                     },
                     "imdb_id": {
                         "type": "string",
-                        "description": "IMDb ID (e.g., tt0111161)",
+                        "description": (
+                            "Explicit IMDb ID such as `tt0111161`. Direct playback "
+                            "does not require TMDB; use season and episode too for "
+                            "a series. Do not combine with `query`."
+                        ),
                         "pattern": "^tt[0-9]+$"
                     },
                     "type": {
                         "type": "string",
                         "enum": ["movie", "tv"],
-                        "description": "movie or tv (required with query)"
+                        "description": (
+                            "Content type for title-based playback: `movie` or "
+                            "`tv`. Required with `query`; not used to resolve a "
+                            "direct `imdb_id`."
+                        )
                     },
                     "season": {
                         "type": "integer",
-                        "description": "Season number (for TV)",
+                        "description": (
+                            "1-based season number. For a title-based TV search, "
+                            "provide it with `episode`; for direct IMDb playback, "
+                            "both numbers identify a series episode."
+                        ),
                         "minimum": 1
                     },
                     "episode": {
                         "type": "integer",
-                        "description": "Episode number (for TV)",
+                        "description": (
+                            "1-based episode number. Must be supplied together with "
+                            "`season` for TV title search or direct series playback."
+                        ),
                         "minimum": 1
                     },
                     "source": {
                         "type": "string",
                         "enum": ["search", "library"],
-                        "description": "search (TMDB) or library (Stremio)",
+                        "description": (
+                            "For title playback, `search` (default) resolves the "
+                            "first TMDB match and `library` resolves the first "
+                            "case-insensitive library-name match. `library` needs "
+                            "`STREMIO_AUTH_KEY`; ignored when `imdb_id` is supplied."
+                        ),
                         "default": "search"
                     },
                     "year": {
                         "type": "integer",
-                        "description": "Optional year filter"
+                        "description": (
+                            "Optional year passed to TMDB for `source=search` "
+                            "title lookup; ignored for direct IDs and library lookup."
+                        )
                     }
-                }
+                },
+                "oneOf": [
+                    {
+                        "required": ["imdb_id"],
+                        "not": {"required": ["query"]}
+                    },
+                    {
+                        "required": ["query", "type"],
+                        "not": {"required": ["imdb_id"]}
+                    }
+                ],
+                "allOf": [
+                    {
+                        "if": {"required": ["season"]},
+                        "then": {"required": ["episode"]}
+                    },
+                    {
+                        "if": {"required": ["episode"]},
+                        "then": {"required": ["season"]}
+                    },
+                    {
+                        "if": {
+                            "required": ["query", "type"],
+                            "properties": {"type": {"const": "tv"}},
+                            "anyOf": [
+                                {"not": {"required": ["source"]}},
+                                {"properties": {"source": {"const": "search"}}}
+                            ]
+                        },
+                        "then": {"required": ["season", "episode"]}
+                    }
+                ]
             }
         ),
         Tool(
             name="library",
+            title="Read or change the Stremio library",
             description=(
-                "Read or mutate the Stremio library. Add/remove require an "
-                "explicit IMDb ID and content type."
+                "Read or mutate the authenticated Stremio account. Use this "
+                "instead of `search` for the user's personal library or continue-"
+                "watching data; use `play` with `source=library` to open a library "
+                "title on the TV. Every action requires `STREMIO_AUTH_KEY` and no "
+                "Android TV connection. `list`, `continue`, `search`, and `check` "
+                "are read-only. `add` and `remove` persist account changes and "
+                "require an explicit valid IMDb ID plus `type` (`movie` or "
+                "`series`; `tv` is accepted as an alias), never a title lookup. "
+                "`list` returns active items by default and can include soft-"
+                "deleted items with `active_only=false`; its display is capped at "
+                "20 items with a remainder count. `continue` returns active items "
+                "that have started and are not finished, sorted by most recent "
+                "watch time; `active_only` does not change that action. `search` "
+                "requires `query` and performs a case-insensitive substring match "
+                "on library names. `check` requires an explicit `imdb_id` and "
+                "reports active, removed, not found, or unavailable. For a new or "
+                "removed item, `add` obtains and validates Cinemeta metadata; an "
+                "active item is an `already in library` no-op, while re-adding a "
+                "removed item preserves its watch state. `remove` is a soft delete "
+                "that preserves watch state; removing an already removed item is an "
+                "`already removed` no-op. Every write is followed by a read-back "
+                "verification and fails closed on a read error, identity/type "
+                "mismatch, duplicate or extra row, or verification conflict. "
+                "Results are plain text. Empty, not-found, unavailable, invalid-"
+                "argument, and failed-mutation outcomes are reported distinctly; "
+                "a failed read is never treated as an empty library."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
             ),
             inputSchema={
                 "type": "object",
@@ -1778,59 +1930,218 @@ async def list_tools() -> list[Tool]:
                     "action": {
                         "type": "string",
                         "enum": ["list", "continue", "search", "check", "add", "remove"],
-                        "description": "Library action to perform"
+                        "description": (
+                            "`list`, `continue`, `search`, and `check` read the "
+                            "account; `add` and `remove` mutate it."
+                        )
                     },
                     "query": {
                         "type": "string",
-                        "description": "Title substring for search"
+                        "description": (
+                            "Required only for action=`search`; a case-insensitive "
+                            "substring of the saved library title."
+                        )
                     },
                     "type": {
                         "type": "string",
                         "enum": ["movie", "series", "tv"],
-                        "description": "Required for add/remove; tv is an alias for series"
+                        "description": (
+                            "Required for `add`/`remove`: `movie` or `series`; "
+                            "`tv` is an alias for `series`. Ignored by read actions."
+                        )
                     },
                     "imdb_id": {
                         "type": "string",
                         "pattern": "^tt[0-9]+$",
-                        "description": "Explicit IMDb ID for check/add/remove"
+                        "description": (
+                            "Explicit IMDb ID, required for `check`, `add`, and "
+                            "`remove`; titles are never resolved for mutations."
+                        )
                     },
                     "active_only": {
                         "type": "boolean",
                         "default": True,
-                        "description": "Exclude soft-deleted items from list/search"
+                        "description": (
+                            "For `list` and `search`, exclude soft-deleted items "
+                            "when true (default). It has no effect on `continue`, "
+                            "`check`, `add`, or `remove`."
+                        )
                     }
                 },
-                "required": ["action"]
+                "required": ["action"],
+                "allOf": [
+                    {
+                        "if": {
+                            "required": ["action"],
+                            "properties": {"action": {"const": "search"}}
+                        },
+                        "then": {"required": ["query"]}
+                    },
+                    {
+                        "if": {
+                            "required": ["action"],
+                            "properties": {"action": {"const": "check"}}
+                        },
+                        "then": {"required": ["imdb_id"]}
+                    },
+                    {
+                        "if": {
+                            "required": ["action"],
+                            "properties": {
+                                "action": {"enum": ["add", "remove"]}
+                            }
+                        },
+                        "then": {"required": ["imdb_id", "type"]}
+                    }
+                ]
             }
         ),
         Tool(
             name="tv_control",
-            description="Control Android TV. volume: up/down/mute/set. playback: play/pause/toggle/stop/next/previous/forward/rewind; stop succeeds only when playback is verified to have ended (no actively playing session), not merely when a key event is delivered. navigate: up/down/left/right/select/back/home. power: wake/sleep/toggle/status.",
+            title="Control the Android TV",
+            description=(
+                "Send remote-like commands to the physical Android TV over native "
+                "ADB. Use this after `play` to control the current player or its "
+                "focused UI; use `search` for title discovery, `play` to open a "
+                "deep link, and `playback_status` to inspect playback. It requires "
+                "`ANDROID_TV_HOST`, the native ADB executable, and a reachable, "
+                "authorized TV connection. `volume` actions are `up`, `down`, "
+                "`mute`, and `set`; `set` requires integer `value` 0-15 and sends "
+                "the level without a volume read-back. `playback` actions are "
+                "`play`, `pause`, `toggle`, `stop`, `next`, `previous`, `forward`, "
+                "and `rewind`; `stop` is special: it verifies that Stremio is no "
+                "longer actively playing and may fall back to pause+back and then "
+                "force-stop `com.stremio.one`, rather than treating key delivery as "
+                "success. Other playback and navigation actions report command "
+                "delivery, not the resulting player state. `navigate` sends "
+                "`up`, `down`, `left`, `right`, `select`, `back`, or `home` to the "
+                "currently focused Android UI; `select` does not verify that Stremio "
+                "has focus, so do not use it on the launcher or an unrelated app. "
+                "`power` supports `wake`, `sleep`, `toggle`, and read-only `status`; "
+                "status returns `on`, `off`, or `unknown` from a power diagnostic "
+                "and does not change power. Other actions affect the physical TV "
+                "and return plain text confirmation or a safe categorized ADB "
+                "failure."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
                         "enum": ["volume", "playback", "navigate", "power"],
-                        "description": "volume, playback, navigate, or power"
+                        "description": "Command family: volume, playback, navigate, or power."
                     },
                     "action": {
                         "type": "string",
-                        "description": "Action name (see tool description for valid actions per category)"
+                        "description": (
+                            "Action allowed by the selected category: volume "
+                            "up/down/mute/set; playback "
+                            "play/pause/toggle/stop/next/previous/forward/rewind; "
+                            "navigate up/down/left/right/select/back/home; power "
+                            "wake/sleep/toggle/status."
+                        )
                     },
                     "value": {
-                        "description": "Value for 'set' actions (e.g., volume 0-15)"
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 15,
+                        "description": "Required only for category=`volume`, action=`set`; volume level 0-15."
                     }
                 },
-                "required": ["category", "action"]
+                "required": ["category", "action"],
+                "oneOf": [
+                    {
+                        "required": ["category", "action"],
+                        "properties": {
+                            "category": {"const": "volume"},
+                            "action": {"enum": ["up", "down", "mute", "set"]}
+                        }
+                    },
+                    {
+                        "required": ["category", "action"],
+                        "properties": {
+                            "category": {"const": "playback"},
+                            "action": {
+                                "enum": [
+                                    "play", "pause", "toggle", "stop", "next",
+                                    "previous", "forward", "rewind"
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        "required": ["category", "action"],
+                        "properties": {
+                            "category": {"const": "navigate"},
+                            "action": {
+                                "enum": ["up", "down", "left", "right", "select", "back", "home"]
+                            }
+                        }
+                    },
+                    {
+                        "required": ["category", "action"],
+                        "properties": {
+                            "category": {"const": "power"},
+                            "action": {"enum": ["wake", "sleep", "toggle", "status"]}
+                        }
+                    }
+                ],
+                "allOf": [
+                    {
+                        "if": {
+                            "required": ["category", "action"],
+                            "properties": {
+                                "category": {"const": "volume"},
+                                "action": {"const": "set"}
+                            }
+                        },
+                        "then": {"required": ["value"]},
+                        "else": {"not": {"required": ["value"]}}
+                    }
+                ]
             }
         ),
         Tool(
             name="playback_status",
-            description="Get current playback status. Returns app, title, state (playing/paused/stalled/stopped/none/error/unknown; stalled means the session claims playing but audio output is not live), position, and duration.",
+            title="Inspect Stremio playback",
+            description=(
+                "Read-only diagnostics for the current Stremio media session on "
+                "the Android TV. Use this to verify or inspect what `play` opened; "
+                "use `tv_control` to change playback and `search` or `library` to "
+                "find content. It requires `ANDROID_TV_HOST` and an authorized, "
+                "reachable native ADB connection and takes no arguments. The "
+                "server reads Android media-session diagnostics scoped to "
+                "Stremio's `com.stremio.one` session, corroborates a claimed "
+                "`PLAYING` state with a started Stremio-owner audio track, and may "
+                "use uptime and media-extractor diagnostics for position and "
+                "duration. It returns plain text with App, Title, State, Position, "
+                "and Duration; times are formatted as `MM:SS` when available and "
+                "otherwise `Unknown`. States include `playing`, `paused`, "
+                "`stalled`, `stopped`, `none`, `error`, and `unknown`; `stalled` "
+                "means the session claimed playing but live Stremio audio was not "
+                "corroborated, and its position is not extrapolated. If no active "
+                "Stremio media session is found it says so. A failed media-session "
+                "dump returns a safe ADB error; other unavailable diagnostics can "
+                "leave fields unknown. This tool never changes the TV or the "
+                "Stremio account and is a snapshot, not a guarantee that a stream "
+                "will continue playing."
+            ),
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {},
+                "additionalProperties": False
             }
         )
     ]

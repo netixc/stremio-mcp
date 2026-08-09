@@ -1,6 +1,6 @@
 # Usage examples
 
-These examples use the five tools exposed by the server: `search`, `play`, `library`, `tv_control`, and `playback_status`. The MCP client decides when to call them based on your prompt.
+These examples use the five tools exposed by the server: `search`, `play`, `library`, `tv_control`, and `playback_status`. The MCP client decides when to call them based on your prompt. Use `search` for TMDB discovery, `library` for the authenticated personal collection, `play` to open content, `tv_control` for remote commands, and `playback_status` to inspect the current Stremio session. Only library `add` and `remove`, and the TV-opening/control tools, have side effects.
 
 ## Search before playing
 
@@ -45,7 +45,7 @@ Direct IMDb playback does not require TMDB.
 
 ## Series episodes
 
-A series request must include both season and episode:
+For direct IMDb playback and `source="search"` title playback, a series request must include both season and episode:
 
 ```text
 User: Play Breaking Bad season 1 episode 1.

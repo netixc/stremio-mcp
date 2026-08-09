@@ -181,17 +181,21 @@ Every HTTP request uses one shared async client with explicit timeouts, a bounde
 
 | Tool | Purpose | External access and side effects |
 | --- | --- | --- |
-| `search` | Search movies, TV shows, and optional years | Sends read-only requests to TMDB |
-| `play` | Open a movie or specific episode by title or IMDb ID | May query TMDB/Stremio, opens Stremio, and sends a center key press |
-| `library` | List, continue, search, check, add, or remove items | Contacts Stremio; `add` and `remove` mutate the account |
-| `tv_control` | Volume, playback, navigation, and power controls | Sends commands to the physical Android TV |
-| `playback_status` | Read current Stremio playback diagnostics | Reads Android media-session, audio-track liveness, and extractor diagnostics |
+| Tool | Purpose | External access and side effects |
+| --- | --- | --- |
+| `search` | Read-only TMDB discovery for movies/TV and IMDb IDs | Sends bounded read-only requests to TMDB; never changes the TV or account |
+| `play` | Open a movie or episode by direct IMDb ID or by title | Requires ADB; title search may query TMDB or the library, opens Stremio, and attempts a center key press |
+| `library` | Read the account or add/remove explicit items | Requires the Stremio auth key; only `add` and `remove` persist account changes |
+| `tv_control` | Send volume, playback, navigation, or power commands | Sends commands to the physical Android TV; playback `stop` verifies its post-condition |
+| `playback_status` | Read the current Stremio playback snapshot | Reads only Stremio-scoped media-session, audio-track, uptime, and extractor diagnostics |
 
-Library mutations require an explicit IMDb ID and content type. Search first when a title is ambiguous; title-based `play` otherwise uses the first matching result. Series playback requires both a season and an episode.
+Use `search` for TMDB discovery and `library` with `action=search` for the personal Stremio collection. Use `play` to open content, `tv_control` for remote-like commands, and `playback_status` to inspect what is actually playing. All five tools return plain text rather than structured result objects.
 
-Library reads report `found`, `not found`, and `unavailable` as distinct outcomes. Mutations fail closed: `add` and `remove` abort without writing whenever the preceding read failed, returned an item whose `_id` is not exactly the requested ID, returned duplicate or unrequested rows, or returned an item of a different content type. This means a transient Stremio failure can never be mistaken for "this item does not exist" and overwrite existing watch state.
+Library mutations require an explicit IMDb ID and content type. Search first when a title is ambiguous; title-based `play` otherwise uses the first matching result. For `play` title searches, `source=search` requires both season and episode for TV; `source=library` can use a saved episode or default to S1E1. Direct series playback also requires both numbers. `play` reports an accepted Android intent, not a verified stream or center-key action.
 
-`search` reports a TMDB outage as an error rather than as "no results". When an automatic search reaches only one of the movie and TV halves, it returns the half that succeeded and appends a `(partial results — …)` note.
+Library reads report empty, not found, and unavailable outcomes distinctly. Mutations fail closed: `add` and `remove` abort without writing whenever the preceding read failed, returned an item whose `_id` is not exactly the requested ID, returned duplicate or unrequested rows, or returned an item of a different content type. Re-adding and removing are account mutations that preserve watch state; removal is a soft delete and writes are verified with a follow-up read.
+
+`search` reports a TMDB outage as an error rather than as "no results". When an automatic search reaches only one of the movie and TV halves, it returns the half that succeeded and appends a `(partial results — …)` note. `tv_control` does not verify ordinary key effects; use `playback_status` for a snapshot, whose `stalled` state means a claimed PLAYING session lacked corroborating live Stremio audio. Do not send `navigate/select` unless Stremio has the intended focus.
 
 ## Example prompts
 
