@@ -1078,9 +1078,12 @@ class ToolDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.tools = {tool.name: tool for tool in await stremio_mcp.list_tools()}
 
     def schema(self, name):
-        schema = self.tools[name].inputSchema
+        schema = self.tools[name].model_dump(by_alias=True)["inputSchema"]
         Draft202012Validator.check_schema(schema)
         return schema
+
+    def annotations(self, name):
+        return self.tools[name].annotations.model_dump(by_alias=True)
 
     def test_each_tool_exposes_selection_guidance_and_effect_annotations(self):
         expected_phrases = {
@@ -1109,13 +1112,13 @@ class ToolDefinitionTests(unittest.IsolatedAsyncioTestCase):
                 for phrase in phrases:
                     self.assertIn(phrase.lower(), description)
 
-        self.assertTrue(self.tools["search"].annotations.readOnlyHint)
-        self.assertFalse(self.tools["play"].annotations.readOnlyHint)
-        self.assertTrue(self.tools["playback_status"].annotations.readOnlyHint)
-        self.assertFalse(self.tools["library"].annotations.readOnlyHint)
-        self.assertTrue(self.tools["library"].annotations.destructiveHint)
-        self.assertFalse(self.tools["tv_control"].annotations.readOnlyHint)
-        self.assertTrue(self.tools["tv_control"].annotations.destructiveHint)
+        self.assertTrue(self.annotations("search")["readOnlyHint"])
+        self.assertFalse(self.annotations("play")["readOnlyHint"])
+        self.assertTrue(self.annotations("playback_status")["readOnlyHint"])
+        self.assertFalse(self.annotations("library")["readOnlyHint"])
+        self.assertTrue(self.annotations("library")["destructiveHint"])
+        self.assertFalse(self.annotations("tv_control")["readOnlyHint"])
+        self.assertTrue(self.annotations("tv_control")["destructiveHint"])
 
     def test_search_schema_keeps_required_query_and_categories(self):
         schema = self.schema("search")
