@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - `pyproject.toml` keywords now include `mcp-server`, `model-context-protocol`, `media-center`, and `tmdb` for PyPI search. Package identity and version are unchanged.
+- MCP SDK compatibility now includes 2.x while retaining the 1.28.1 lower bound. The server uses the SDK 2 request-handler API without changing its five-tool contract or input validation.
 
 ## [0.2.0] - 2026-07-22
 
