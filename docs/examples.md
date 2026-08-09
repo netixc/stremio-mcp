@@ -166,7 +166,7 @@ If only this fails, check `STREMIO_AUTH_KEY` and restart the MCP client after up
 ## Tips
 
 - Include a year for remakes.
-- Always specify season and episode for series.
+- Specify season and episode for direct IMDb and TMDB title playback of a series; library playback can use its saved episode or default to S1E1.
 - Prefer search → confirm IMDb ID → play for ambiguous titles.
 - Keep library mutations explicit and review them before approval.
 - Use a physical remote if Stremio's focus is not where the automatic key press expects.

@@ -181,8 +181,6 @@ Every HTTP request uses one shared async client with explicit timeouts, a bounde
 
 | Tool | Purpose | External access and side effects |
 | --- | --- | --- |
-| Tool | Purpose | External access and side effects |
-| --- | --- | --- |
 | `search` | Read-only TMDB discovery for movies/TV and IMDb IDs | Sends bounded read-only requests to TMDB; never changes the TV or account |
 | `play` | Open a movie or episode by direct IMDb ID or by title | Requires ADB; title search may query TMDB or the library, opens Stremio, and attempts a center key press |
 | `library` | Read the account or add/remove explicit items | Requires the Stremio auth key; only `add` and `remove` persist account changes |
@@ -253,7 +251,7 @@ adb devices -l
 - Launch Stremio manually once and sign in.
 - Confirm that your Stremio addons provide streams for the title.
 - Select a source with `tv_control` or a physical remote.
-- For a series, provide both season and episode.
+- For direct IMDb or TMDB title playback of a series, provide both season and episode; library playback can use its saved episode or default to S1E1.
 
 ### Search or library access fails
 
