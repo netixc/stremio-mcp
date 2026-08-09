@@ -1055,6 +1055,22 @@ class McpSdkIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_result.content[0].text, "Unknown tool: not-a-tool")
         self.assertIsNotNone(stremio_mcp.app.create_initialization_options().capabilities.tools)
 
+    async def test_v2_call_handler_rejects_invalid_tool_arguments(self):
+        params = stremio_mcp.CallToolRequestParams(
+            name="tv_control",
+            arguments={"category": "invalid", "action": "up"},
+        )
+
+        with patch.object(stremio_mcp, "call_tool", new=AsyncMock()) as dispatcher:
+            result = await stremio_mcp._call_tool_handler(None, params)
+
+        is_error = getattr(result, "is_error", None)
+        if is_error is None:
+            is_error = result.isError
+        self.assertTrue(is_error)
+        self.assertTrue(result.content[0].text.startswith("Input validation error:"))
+        dispatcher.assert_not_awaited()
+
 
 class LibraryReadOutcomeTests(unittest.IsolatedAsyncioTestCase):
     """Fix 2: reads distinguish found, authoritative not-found, and error."""

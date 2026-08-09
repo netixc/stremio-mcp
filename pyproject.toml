@@ -38,6 +38,7 @@ classifiers = [
 
 dependencies = [
     "httpx>=0.28.1",
+    "jsonschema>=4.20.0",
     "mcp>=1.28.1,<3",
 ]
 

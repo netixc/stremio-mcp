@@ -15,6 +15,7 @@ import re
 from typing import Any, Iterable, Optional
 
 import httpx
+import jsonschema
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -2347,7 +2348,27 @@ async def _call_tool_handler(
     _ctx: Any, params: CallToolRequestParams
 ) -> CallToolResult:
     """Adapt the public dispatcher to the MCP SDK v2 request handler API."""
-    content = await call_tool(params.name, params.arguments or {})
+    arguments = params.arguments or {}
+    tool = next(
+        (candidate for candidate in await list_tools() if candidate.name == params.name),
+        None,
+    )
+    if tool is not None:
+        input_schema = getattr(tool, "input_schema", None)
+        if input_schema is None:
+            input_schema = tool.inputSchema
+        try:
+            jsonschema.validate(instance=arguments, schema=input_schema)
+        except jsonschema.ValidationError as exc:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Input validation error: {exc.message}",
+                )],
+                isError=True,
+            )
+
+    content = await call_tool(params.name, arguments)
     return CallToolResult(content=content)
 
 
