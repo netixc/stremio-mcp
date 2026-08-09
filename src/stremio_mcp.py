@@ -17,7 +17,14 @@ from typing import Any, Iterable, Optional
 import httpx
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
 
 logger = logging.getLogger("stremio-mcp")
 
@@ -1688,7 +1695,6 @@ async def shutdown():
         await client.aclose()
 
 
-@app.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools"""
     return [
@@ -1837,7 +1843,6 @@ def _adb_failure_text(controller: Any) -> str:
     return "ADB failure (category=unknown): the operation did not complete."
 
 
-@app.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls"""
 
@@ -2329,6 +2334,34 @@ Position: {position_str} / {duration_str}"""
             type="text",
             text=f"Error: {redact_secrets(str(e))}"
         )]
+
+
+async def _list_tools_handler(
+    _ctx: Any, _params: PaginatedRequestParams
+) -> ListToolsResult:
+    """Adapt the public tool listing to the MCP SDK v2 request handler API."""
+    return ListToolsResult(tools=await list_tools())
+
+
+async def _call_tool_handler(
+    _ctx: Any, params: CallToolRequestParams
+) -> CallToolResult:
+    """Adapt the public dispatcher to the MCP SDK v2 request handler API."""
+    content = await call_tool(params.name, params.arguments or {})
+    return CallToolResult(content=content)
+
+
+def _register_mcp_handlers() -> None:
+    """Register handlers across the v1 decorator and v2 callback APIs."""
+    if hasattr(app, "add_request_handler"):
+        app.add_request_handler("tools/list", PaginatedRequestParams, _list_tools_handler)
+        app.add_request_handler("tools/call", CallToolRequestParams, _call_tool_handler)
+    else:  # MCP SDK v1 compatibility for the declared lower bound.
+        app.list_tools()(list_tools)
+        app.call_tool()(call_tool)
+
+
+_register_mcp_handlers()
 
 
 async def main():

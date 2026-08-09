@@ -971,19 +971,15 @@ class ReleaseMetadataTests(unittest.TestCase):
             readme,
         )
 
-    def test_mcp_dependency_stays_on_stable_v1(self):
-        """Pin the official SDK to v1 until a deliberate v2 migration.
-
-        Fail-before (unchanged ``mcp>=1.28.1``) accepted ``2.0.0``; the upper
-        bound must reject it while still accepting the locked v1 baseline.
-        """
+    def test_mcp_dependency_allows_the_stable_v2_sdk(self):
+        """Keep the SDK requirement open through the stable v2 release."""
         root = Path(__file__).resolve().parents[1]
         requirement = _project_dependency(root, "mcp")
-        self.assertEqual(requirement, "mcp>=1.28.1,<2")
+        self.assertEqual(requirement, "mcp>=1.28.1,<3")
         self.assertEqual(
             _requirement_clauses(requirement),
-            {(">=", "1.28.1"), ("<", "2")},
-            f"{requirement!r} must floor at the locked v1 baseline and exclude 2.x",
+            {(">=", "1.28.1"), ("<", "3")},
+            f"{requirement!r} must retain the v1 floor and allow stable v2",
         )
 
 
@@ -1028,6 +1024,36 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_tool_is_rejected(self):
         response = await stremio_mcp.call_tool("not-a-tool", {})
         self.assertEqual(response[0].text, "Unknown tool: not-a-tool")
+
+
+class McpSdkIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_v2_handlers_bridge_the_five_tool_contract(self):
+        """The v2 low-level server must expose the existing public dispatcher."""
+        get_handler = getattr(stremio_mcp.app, "get_request_handler", None)
+        if get_handler is None:
+            self.skipTest("MCP SDK v1 does not expose the v2 handler API")
+
+        list_entry = get_handler("tools/list")
+        call_entry = get_handler("tools/call")
+        self.assertIsNotNone(list_entry)
+        self.assertIsNotNone(call_entry)
+
+        list_result = await list_entry.handler(
+            None, stremio_mcp.PaginatedRequestParams()
+        )
+        self.assertIsInstance(list_result, stremio_mcp.ListToolsResult)
+        self.assertEqual(
+            [tool.name for tool in list_result.tools],
+            ["search", "play", "library", "tv_control", "playback_status"],
+        )
+
+        call_result = await call_entry.handler(
+            None,
+            stremio_mcp.CallToolRequestParams(name="not-a-tool", arguments={}),
+        )
+        self.assertIsInstance(call_result, stremio_mcp.CallToolResult)
+        self.assertEqual(call_result.content[0].text, "Unknown tool: not-a-tool")
+        self.assertIsNotNone(stremio_mcp.app.create_initialization_options().capabilities.tools)
 
 
 class LibraryReadOutcomeTests(unittest.IsolatedAsyncioTestCase):
@@ -1588,13 +1614,16 @@ class LibraryMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_library_schema_exposes_safe_mutation_actions(self):
         tools = await stremio_mcp.list_tools()
         library_tool = next(tool for tool in tools if tool.name == "library")
+        input_schema = getattr(library_tool, "input_schema", None)
+        if input_schema is None:  # MCP SDK v1 uses the wire-case attribute.
+            input_schema = library_tool.inputSchema
 
         self.assertEqual(
-            library_tool.inputSchema["properties"]["action"]["enum"],
+            input_schema["properties"]["action"]["enum"],
             ["list", "continue", "search", "check", "add", "remove"],
         )
-        self.assertIn("imdb_id", library_tool.inputSchema["properties"])
-        self.assertIn("active_only", library_tool.inputSchema["properties"])
+        self.assertIn("imdb_id", input_schema["properties"])
+        self.assertIn("active_only", input_schema["properties"])
 
     async def test_add_requires_direct_imdb_id_and_type(self):
         stremio_mcp.stremio_client.add_to_library = AsyncMock()
