@@ -1115,6 +1115,7 @@ class ToolDefinitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.tools["library"].annotations.readOnlyHint)
         self.assertTrue(self.tools["library"].annotations.destructiveHint)
         self.assertFalse(self.tools["tv_control"].annotations.readOnlyHint)
+        self.assertTrue(self.tools["tv_control"].annotations.destructiveHint)
 
     def test_search_schema_keeps_required_query_and_categories(self):
         schema = self.schema("search")

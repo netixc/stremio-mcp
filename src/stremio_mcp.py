@@ -2025,7 +2025,7 @@ async def list_tools() -> list[Tool]:
             ),
             annotations=ToolAnnotations(
                 readOnlyHint=False,
-                destructiveHint=False,
+                destructiveHint=True,
                 idempotentHint=False,
                 openWorldHint=True,
             ),
